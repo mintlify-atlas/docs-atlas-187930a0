@@ -1,0 +1,164 @@
+---
+title: "Layout Queries"
+description: "Per-member sizeof, alignof, and byte-offset queries for aggregate types."
+---
+
+Each of the three functions (`size_of`, `align_of`, `offset_of`) provides four overloads: by numeric index with a type parameter, by numeric index with a value parameter, by string name with a type parameter, and by string name with a value parameter.
+
+---
+
+## reflect::size_of
+
+Returns `sizeof` for the member at position `N` or with name `Name`.
+
+```cpp
+template <std::size_t N, class T>
+[[nodiscard]] constexpr auto size_of() -> std::size_t;
+
+template <std::size_t N, class T>
+[[nodiscard]] constexpr auto size_of(const T&) -> std::size_t;
+
+template <fixed_string Name, class T>
+[[nodiscard]] constexpr auto size_of() -> std::size_t;
+
+template <fixed_string Name, class T>
+[[nodiscard]] constexpr auto size_of(const T&) -> std::size_t;
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `N` | Zero-based index of the member. Must be less than `reflect::size<T>()`. |
+  | `Name` | Compile-time string name of the member. Must satisfy `has_member_name<T, Name>`. |
+  | `T` | An aggregate type. Must satisfy `std::is_aggregate_v<std::remove_cvref_t<T>>`. |
+</Accordion>
+
+**Return value** — `sizeof(MemberType)`.
+
+---
+
+## reflect::align_of
+
+Returns `alignof` for the member at position `N` or with name `Name`.
+
+```cpp
+template <std::size_t N, class T>
+[[nodiscard]] constexpr auto align_of() -> std::size_t;
+
+template <std::size_t N, class T>
+[[nodiscard]] constexpr auto align_of(const T&) -> std::size_t;
+
+template <fixed_string Name, class T>
+[[nodiscard]] constexpr auto align_of() -> std::size_t;
+
+template <fixed_string Name, class T>
+[[nodiscard]] constexpr auto align_of(const T&) -> std::size_t;
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `N` | Zero-based index of the member. |
+  | `Name` | Compile-time string name of the member. |
+  | `T` | An aggregate type. |
+</Accordion>
+
+**Return value** — `alignof(MemberType)`.
+
+---
+
+## reflect::offset_of
+
+Returns the byte offset of the member from the start of the containing struct. Equivalent to `__builtin_offsetof` for the same member, but accessible via compile-time index or name without needing the source identifier.
+
+```cpp
+template <std::size_t N, class T>
+[[nodiscard]] constexpr auto offset_of() -> std::size_t;
+
+template <std::size_t N, class T>
+[[nodiscard]] constexpr auto offset_of(const T&) -> std::size_t;
+
+template <fixed_string Name, class T>
+[[nodiscard]] constexpr auto offset_of() -> std::size_t;
+
+template <fixed_string Name, class T>
+[[nodiscard]] constexpr auto offset_of(const T&) -> std::size_t;
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `N` | Zero-based index of the member. |
+  | `Name` | Compile-time string name of the member. |
+  | `T` | An aggregate type. |
+</Accordion>
+
+**Return value** — The byte distance from the start of the struct to the member, accounting for padding inserted by the compiler.
+
+---
+
+## Combined example
+
+```cpp
+#include <reflect>
+
+struct foo { int a; bool b; short c; };
+
+// size_of — by index
+static_assert(4 == reflect::size_of<0, foo>());  // sizeof(int)
+static_assert(1 == reflect::size_of<1, foo>());  // sizeof(bool)
+
+// size_of — by name
+static_assert(2 == reflect::size_of<"c", foo>()); // sizeof(short)
+
+// align_of — by index
+static_assert(4 == reflect::align_of<0, foo>()); // alignof(int)
+static_assert(1 == reflect::align_of<1, foo>()); // alignof(bool)
+
+// align_of — by name
+static_assert(2 == reflect::align_of<"c", foo>()); // alignof(short)
+
+// offset_of — by index
+static_assert(0 == reflect::offset_of<0, foo>()); // int a at byte 0
+static_assert(4 == reflect::offset_of<1, foo>()); // bool b at byte 4
+
+// offset_of — by name
+static_assert(6 == reflect::offset_of<"c", foo>()); // short c at byte 6
+```
+
+Memory layout of `foo` (on a typical 64-bit platform):
+
+```
+Byte: [0][1][2][3] [4] [5] [6][7]
+       a   a   a   a    b  pad  c   c
+```
+
+---
+
+## Using with for_each
+
+All three functions accept `std::integral_constant` as a template argument, making them directly composable with `for_each`:
+
+```cpp
+struct foo { int a; bool b; short c; };
+const foo f{};
+
+reflect::for_each([&](auto I) {
+  std::println("member[{}]: size={} align={} offset={}",
+    std::size_t(I),
+    reflect::size_of<I>(f),
+    reflect::align_of<I>(f),
+    reflect::offset_of<I>(f));
+}, f);
+```
+
+Output (typical x86-64 ABI):
+```
+member[0]: size=4 align=4 offset=0
+member[1]: size=1 align=1 offset=4
+member[2]: size=2 align=2 offset=6
+```
+
+<Tip>
+  `offset_of` results match `__builtin_offsetof` exactly and are verified by the library's built-in `static_assert` tests. Packed structs (`#pragma pack`) are also supported correctly.
+</Tip>

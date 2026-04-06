@@ -1,0 +1,260 @@
+---
+title: "Member Access"
+description: "Functions for addressing individual aggregate members by compile-time index or name."
+---
+
+## reflect::member_name
+
+Returns the string name of the Nth data member of an aggregate type.
+
+```cpp
+template <std::size_t N, class T>
+[[nodiscard]] constexpr auto member_name() noexcept -> std::string_view;
+
+template <std::size_t N, class T>
+[[nodiscard]] constexpr auto member_name(const T&) noexcept -> std::string_view;
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `N` | Zero-based index of the member. Must be less than `reflect::size<T>()`. A static assertion fires if out of range. |
+  | `T` | An aggregate type. `std::remove_cvref_t` is applied internally. |
+</Accordion>
+
+**Return value** — A `std::string_view` over `static constexpr` storage containing the member's source-code identifier.
+
+```cpp
+struct foo { int a; int b; };
+
+static_assert(std::string_view{"a"} == reflect::member_name<0, foo>());
+static_assert(std::string_view{"a"} == reflect::member_name<0>(foo{}));
+static_assert(std::string_view{"b"} == reflect::member_name<1, foo>());
+static_assert(std::string_view{"b"} == reflect::member_name<1>(foo{}));
+```
+
+---
+
+## reflect::get (by index)
+
+Returns a reference to the Nth member of an aggregate, preserving the value category of the aggregate argument.
+
+```cpp
+template <std::size_t N, class T>
+[[nodiscard]] constexpr decltype(auto) get(T&& t) noexcept;
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `N` | Zero-based index of the member. Must be less than `reflect::size<T>()`. Attempting to use an out-of-range index is a hard compile error via a `requires` constraint. |
+  | `T` | An aggregate, `std::tuple`, or `std::pair`. `is_record_like_type_v` must be satisfied. |
+</Accordion>
+
+**Return value** — `decltype(auto)`:
+- `T` is an lvalue → returns `MemberType&`
+- `T` is an rvalue → returns `MemberType&&`
+- `T` is a const lvalue → returns `const MemberType&`
+
+<Note>
+  `get` also works on `std::tuple` and `std::pair` — it delegates to `std::get` for those types.
+</Note>
+
+<Tabs>
+  <Tab title="Const access">
+    ```cpp
+    struct foo { int i; bool b; };
+    constexpr auto f = foo{.i = 42, .b = true};
+
+    static_assert(42   == reflect::get<0>(f));
+    static_assert(true == reflect::get<1>(f));
+    ```
+  </Tab>
+  <Tab title="Mutable lvalue reference">
+    ```cpp
+    struct foo { int i; bool b; };
+    auto f = foo{};
+
+    reflect::get<0>(f) = 100;
+    assert(f.i == 100);
+
+    // Type is int&
+    static_assert(std::is_same_v<int&, decltype(reflect::get<0>(f))>);
+    ```
+  </Tab>
+  <Tab title="Rvalue reference">
+    ```cpp
+    struct foo { int i; bool b; };
+
+    // get on an rvalue yields an rvalue reference
+    static_assert(std::is_same_v<int&&, decltype(reflect::get<0>(foo{}))>);
+    ```
+  </Tab>
+  <Tab title="std::tuple">
+    ```cpp
+    using t = std::tuple<int, bool>;
+    auto tup = t{};
+
+    auto v0 = reflect::get<0>(tup); // int
+    auto v1 = reflect::get<1>(tup); // bool
+    static_assert(std::is_same_v<decltype(v0), int>);
+    static_assert(std::is_same_v<decltype(v1), bool>);
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## reflect::get (by name)
+
+Returns a reference to the member of an aggregate identified by a compile-time string name.
+
+```cpp
+template <fixed_string Name, class T>
+[[nodiscard]] constexpr decltype(auto) get(T&& t) noexcept;
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `Name` | A `fixed_string` compile-time string literal. If the type has no member with that name, the compiler emits a diagnostic suggesting the closest matching member name. |
+  | `T` | An aggregate type. Must satisfy `std::is_aggregate_v<std::remove_cvref_t<T>>` and `has_member_name<T, Name>`. |
+</Accordion>
+
+**Return value** — Same value-category semantics as the index-based overload.
+
+<Tabs>
+  <Tab title="Const access">
+    ```cpp
+    struct foo { int i; bool b; };
+    constexpr auto f = foo{.i = 42, .b = true};
+
+    static_assert(42   == reflect::get<"i">(f));
+    static_assert(true == reflect::get<"b">(f));
+    ```
+  </Tab>
+  <Tab title="Mutable reference">
+    ```cpp
+    struct foo { int i; bool b; };
+    auto f = foo{};
+
+    reflect::get<"i">(f) = 99;
+    assert(f.i == 99);
+
+    static_assert(std::is_same_v<int&, decltype(reflect::get<"i">(f))>);
+    ```
+  </Tab>
+  <Tab title="Rvalue">
+    ```cpp
+    struct foo { int i; bool b; };
+
+    static_assert(std::is_same_v<int&&, decltype(reflect::get<"i">(foo{}))>);
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+  Name lookup is constrained at compile time via the `has_member_name` concept. If `Name` does not match any member, the compiler produces a constraint-violation diagnostic indicating which concept was not satisfied.
+</Tip>
+
+---
+
+## reflect::has_member_name
+
+A concept that is satisfied when type `T` has a data member whose name exactly matches `Name`.
+
+```cpp
+template <class T, fixed_string Name>
+concept has_member_name = /*unspecified*/;
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `T` | An aggregate type. `std::remove_cvref_t` is applied internally. |
+  | `Name` | A `fixed_string` compile-time string literal to search for. The match is case-sensitive and exact. |
+</Accordion>
+
+**Satisfied when** — At least one member of `T` has a `member_name` equal to `Name`.
+
+**Not satisfied when** — No member matches, or the name is empty, or the name has a different case.
+
+```cpp
+struct foo { int a; int b; };
+
+static_assert(reflect::has_member_name<foo, "a">);
+static_assert(reflect::has_member_name<foo, "b">);
+static_assert(not reflect::has_member_name<foo, "c">);
+static_assert(not reflect::has_member_name<foo, "A">);  // case-sensitive
+static_assert(not reflect::has_member_name<foo, "">);
+```
+
+<Note>
+  `has_member_name` is used as a constraint on `get<"name">`, `size_of<"name">`, `align_of<"name">`, and `offset_of<"name">`. If the name does not match, the compiler emits a constraint-violation diagnostic pointing to the unsatisfied concept.
+</Note>
+
+---
+
+## reflect::index_of
+
+Returns the zero-based index of the named member within its aggregate.
+
+```cpp
+template <fixed_string Name, class T>
+[[nodiscard]] constexpr auto index_of() noexcept -> std::size_t;
+
+template <fixed_string Name, class T>
+[[nodiscard]] constexpr auto index_of(const T&) noexcept -> std::size_t;
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `Name` | A `fixed_string` naming the member to locate. Must satisfy `has_member_name<T, Name>`. |
+  | `T` | An aggregate type. Must satisfy `std::is_aggregate_v<std::remove_cvref_t<T>>`. |
+</Accordion>
+
+**Return value** — The `std::size_t` index `N` such that `reflect::member_name<N, T>() == Name`.
+
+```cpp
+struct foo { int a; int b; };
+
+static_assert(0 == reflect::index_of<"a", foo>());
+static_assert(1 == reflect::index_of<"b">(foo{}));
+```
+
+<Tip>
+  `index_of` is the building block used internally by `get<"name">`, `size_of<"name">`, `align_of<"name">`, and `offset_of<"name">`. You can use it directly when you need the index for other purposes.
+</Tip>
+
+---
+
+## reflect::member_type
+
+A type alias template that resolves to the (cvref-stripped) type of the Nth member of an aggregate.
+
+```cpp
+template <std::size_t N, class T>
+using member_type = std::remove_cvref_t<decltype(reflect::get<N>(std::declval<T>()))>;
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `N` | Zero-based index of the member. Must be less than `reflect::size<T>()`. |
+  | `T` | An aggregate type that satisfies `is_record_like_type_v`. |
+</Accordion>
+
+**Resolves to** — The type of the Nth member, with cv-qualifiers and references stripped via `std::remove_cvref_t`.
+
+```cpp
+struct foo { int a; bool b; float c; };
+
+static_assert(std::is_same_v<int,   reflect::member_type<0, foo>>);
+static_assert(std::is_same_v<bool,  reflect::member_type<1, foo>>);
+static_assert(std::is_same_v<float, reflect::member_type<2, foo>>);
+```
+
+<Tip>
+  Use `member_type` when you need the type of a member at compile time — for example, to conditionally enable template code based on member types.
+</Tip>

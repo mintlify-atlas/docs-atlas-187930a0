@@ -1,0 +1,239 @@
+---
+title: "Type Introspection"
+description: "Functions for querying type names, identifiers, member counts, and visiting all members of an aggregate."
+---
+
+## reflect::size
+
+Returns the number of data members in an aggregate type. Base class sub-objects are excluded from the count.
+
+```cpp
+template <class T>
+[[nodiscard]] constexpr auto size() noexcept -> std::size_t;
+
+template <class T>
+[[nodiscard]] constexpr auto size(const T&) noexcept -> std::size_t;
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `T` | An aggregate type, `std::tuple` specialisation, or `std::pair` specialisation. `std::remove_cvref_t` is applied internally, so `const T&` and `T&&` are all accepted. |
+</Accordion>
+
+**Return value** — `std::size_t` equal to the number of direct data members. For `std::tuple<Ts...>` and `std::pair<A,B>` the result equals `std::tuple_size_v<T>`.
+
+<Tabs>
+  <Tab title="Type parameter">
+    ```cpp
+    struct foo { int a; int b; } f;
+
+    static_assert(2 == reflect::size<foo>());
+    static_assert(0 == reflect::size<std::tuple<>>());
+    static_assert(3 == reflect::size<std::tuple<int, float, double>>());
+    ```
+  </Tab>
+  <Tab title="Value parameter">
+    ```cpp
+    struct foo { int a; int b; } f;
+
+    static_assert(2 == reflect::size(f));
+    ```
+  </Tab>
+  <Tab title="Inheritance">
+    ```cpp
+    struct base {};
+    struct derived : base { int x; int y; };
+
+    // Base class sub-objects are not counted
+    static_assert(2 == reflect::size<derived>());
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## reflect::type_name
+
+Returns the unqualified name of a type as a `std::string_view`. Template arguments and namespace qualifiers are stripped; only the bare type name is returned.
+
+```cpp
+template <class T>
+[[nodiscard]] constexpr auto type_name() noexcept -> std::string_view;
+
+template <class T>
+[[nodiscard]] constexpr auto type_name(const T&) noexcept -> std::string_view;
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `T` | Any type. CV-qualifiers and references on `T` are stripped internally via `std::remove_cvref_t` and `std::remove_pointer_t`. |
+</Accordion>
+
+**Return value** — A `std::string_view` pointing to a `static constexpr` storage when called at runtime, or directly into compiler-generated string data when evaluated at compile time.
+
+<Note>
+  The returned view is stable across calls: the underlying storage is a `static constexpr` `fixed_string`. It is safe to capture the view and use it after the call returns.
+</Note>
+
+<Tabs>
+  <Tab title="Basic types">
+    ```cpp
+    struct foo { int a; int b; };
+
+    static_assert(std::string_view{"foo"} == reflect::type_name<foo>());
+    static_assert(std::string_view{"foo"} == reflect::type_name(foo{}));
+    static_assert(std::string_view{"int"} == reflect::type_name<int>());
+    static_assert(std::string_view{"void"} == reflect::type_name<void>());
+    ```
+  </Tab>
+  <Tab title="Templates & namespaces">
+    ```cpp
+    // Template arguments are stripped — only the base name is returned
+    template<class T> struct box {};
+
+    static_assert(std::string_view{"box"} == reflect::type_name<box<int>>());
+    static_assert(std::string_view{"box"} == reflect::type_name<box<void>>());
+
+    // Namespace qualifiers are also stripped
+    static_assert(std::string_view{"tuple"} == reflect::type_name(std::tuple<int, int>{}));
+    ```
+  </Tab>
+  <Tab title="Enum & nested types">
+    ```cpp
+    enum E { A, B };
+    struct foo { enum Inner {}; };
+
+    static_assert(std::string_view{"E"}     == reflect::type_name<E>());
+    static_assert(std::string_view{"Inner"} == reflect::type_name<foo::Inner>());
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## reflect::type_id / type_id_v
+
+`type_id` returns a compile-time `std::size_t` computed by hashing `type_name<T>()`. `type_id_v` is a variadic inline variable template — each distinct set of template arguments instantiates a unique lambda, making it a collision-free per-type identity.
+
+```cpp
+template <class T>
+[[nodiscard]] constexpr auto type_id() noexcept -> std::size_t;
+
+template <class T>
+[[nodiscard]] constexpr auto type_id(const T&) noexcept -> std::size_t;
+
+// Inline variable template — one unique lambda per type argument list
+template <class...>
+inline constexpr auto type_id_v = []{};
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `T` | Any type. `type_id<T>()` hashes `type_name<T>()`, so the result depends on the unqualified type name. `type_id_v` accepts a variadic list and provides one unique identity per distinct argument list. |
+</Accordion>
+
+**Return value of `type_id`** — A `std::size_t` computed by XOR-shifting over the characters of `type_name<T>()`. Two types with the same unqualified name will produce the same value.
+
+**`type_id_v`** — A unique lambda instance per type argument list. Since each specialization is a distinct object with a unique address, equality comparisons are guaranteed collision-free.
+
+<Warning>
+  `type_id` may produce the same value for two types whose unqualified names are identical (e.g. two structs both named `foo` in different namespaces). Use `type_id_v` when you need a guaranteed-unique identity.
+</Warning>
+
+<Tabs>
+  <Tab title="type_id">
+    ```cpp
+    struct foo {};
+    struct bar {};
+
+    static_assert(reflect::type_id(foo{}) == reflect::type_id(foo{}));
+    static_assert(reflect::type_id(bar{}) != reflect::type_id<foo>());
+    static_assert(reflect::type_id<int>() != reflect::type_id<void>());
+    ```
+  </Tab>
+  <Tab title="type_id_v">
+    ```cpp
+    static_assert(reflect::type_id_v<void> == reflect::type_id_v<void>);
+    static_assert(reflect::type_id_v<int>  == reflect::type_id_v<int>);
+    static_assert(reflect::type_id_v<int>  != reflect::type_id_v<void>);
+    // CV-qualifiers and references produce distinct identities:
+    static_assert(reflect::type_id_v<int>  != reflect::type_id_v<const int&>);
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## reflect::visit
+
+Calls `fn` with all members of aggregate `t` expanded as individual arguments. The return value of `fn` is forwarded as the return value of `visit`. Value category of each member is preserved: lvalue aggregates yield lvalue member references; rvalue aggregates yield rvalue references.
+
+```cpp
+template <class Fn, class T>
+[[nodiscard]] constexpr decltype(auto) visit(Fn&& fn, T&& t);
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `Fn` | Any callable accepting the member types of `T` as a variadic pack, e.g. `[](auto&&... members) { ... }`. |
+  | `T` | An aggregate, `std::tuple`, or `std::pair`. Must satisfy `is_record_like_type_v`. |
+</Accordion>
+
+**Return value** — `decltype(auto)`: exactly the return type of `fn(members...)`.
+
+<Note>
+  The default implementation supports up to 64 members. To support more, override `visit` using structured bindings with pack expansion once your compiler supports P1061 (`__cpp_structured_bindings >= 202601L`).
+</Note>
+
+<Tabs>
+  <Tab title="Count members">
+    ```cpp
+    struct foo { int a; int b; };
+
+    static_assert(2 == reflect::visit(
+      [](auto&&... args) { return sizeof...(args); },
+      foo{}
+    ));
+    ```
+  </Tab>
+  <Tab title="Sum members">
+    ```cpp
+    struct point { int x; int y; int z; };
+
+    constexpr auto p = point{1, 2, 3};
+    constexpr auto sum = reflect::visit(
+      [](auto&&... members) { return (members + ...); },
+      p
+    );
+    static_assert(6 == sum);
+    ```
+  </Tab>
+  <Tab title="Reference semantics">
+    ```cpp
+    struct foo { int a; int b; };
+
+    auto f = foo{.a = 1, .b = 2};
+
+    // Members are forwarded as lvalue references when f is an lvalue
+    reflect::visit([](auto&... members) {
+      (members *= 2, ...);
+    }, f);
+
+    assert(f.a == 2 && f.b == 4);
+    ```
+  </Tab>
+  <Tab title="std::tuple">
+    ```cpp
+    using ts = std::tuple<int, float, double>;
+
+    static_assert(3 == reflect::visit(
+      [](auto&&... args) { return sizeof...(args); },
+      ts{}
+    ));
+    ```
+  </Tab>
+</Tabs>

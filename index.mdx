@@ -1,97 +1,102 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "reflect — C++20 Static Reflection"
+description: "A single-header, zero-dependency C++20 library for compile-time introspection of aggregate types, enums, and struct members."
 ---
 
-## Setting up
+`reflect` gives you compile-time access to the structure of your C++ types — member names, types, values, and layout — without macros, registration, or runtime overhead. It works with any aggregate type out of the box.
 
-Get your documentation site up and running in minutes.
+```cpp
+#include <reflect>
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+struct foo { int a; float b; };
+constexpr auto f = foo{.a = 42, .b = 3.14f};
 
-## Make it yours
+static_assert(2 == reflect::size(f));
+static_assert("foo" == reflect::type_name(f));
+static_assert("a"   == reflect::member_name<0>(f));
+static_assert(42    == reflect::get<0>(f));
+static_assert(42    == reflect::get<"a">(f));
+```
 
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get reflection working in your project in under 5 minutes.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Installation" icon="download" href="/installation">
+    Single-header include or C++20 module — your choice.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Complete reference for every function in the `reflect` namespace.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="How it works" icon="gears" href="/guides/how-it-works">
+    Understand the C++20 techniques powering the library.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Why reflect?
 
-Everything you need to create world-class documentation.
+<CardGroup cols={2}>
+  <Card title="Zero dependencies" icon="box">
+    Single header file. Drop it in and `#include <reflect>`. No build system changes required.
+  </Card>
+  <Card title="Compile-time everything" icon="bolt">
+    All introspection happens at compile time via `constexpr` and `static_assert`. Zero runtime cost.
+  </Card>
+  <Card title="Self-verifying" icon="shield-check">
+    Runs its own test suite via `static_assert` on every include. If it compiles, it works.
+  </Card>
+  <Card title="Compiler-agnostic" icon="microchip">
+    Works with gcc-12+, clang-15+, and msvc-19.36+. No `#ifdef` per-compiler workarounds.
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## At a glance
 
-## Need inspiration?
+<Steps>
+  <Step title="Include the header">
+    Copy `reflect` from the repository into your project and include it:
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+    ```cpp
+    #include <reflect>
+    ```
+  </Step>
+  <Step title="Inspect any aggregate type">
+    No registration, no macros. Works on any C++ aggregate:
+
+    ```cpp
+    struct Point { double x; double y; double z; };
+
+    // Count fields
+    static_assert(3 == reflect::size<Point>());
+
+    // Get field names
+    static_assert("x" == reflect::member_name<0, Point>());
+    static_assert("y" == reflect::member_name<1, Point>());
+    ```
+  </Step>
+  <Step title="Access members by name or index">
+    ```cpp
+    constexpr auto p = Point{1.0, 2.0, 3.0};
+
+    // By index
+    static_assert(1.0 == reflect::get<0>(p));
+
+    // By name (compile-time string)
+    static_assert(2.0 == reflect::get<"y">(p));
+    ```
+  </Step>
+  <Step title="Iterate all members">
+    ```cpp
+    reflect::for_each([](auto I) {
+      std::println("{} = {}", reflect::member_name<I>(p), reflect::get<I>(p));
+    }, p);
+    // x = 1
+    // y = 2
+    // z = 3
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  `reflect` targets C++20. You need gcc-12+, clang-15+, or msvc-19.36+. See [Installation](/installation) for details.
+</Note>

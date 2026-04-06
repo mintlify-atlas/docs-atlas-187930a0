@@ -1,0 +1,140 @@
+---
+title: "API Overview"
+description: "All functions in the reflect namespace, grouped by category."
+---
+
+`reflect` is a C++20 static reflection library that operates entirely at compile time. All functions live in the `reflect` inline namespace (`reflect::inline v1_2_5`) and are accessed via `#include <reflect>`.
+
+<Note>
+  Unless otherwise noted, every function in this library is `constexpr` and `noexcept`. All name lookups are resolved at compile time — there are no virtual dispatch, RTTI, or exception-handling dependencies. The library compiles cleanly with `-fno-exceptions -fno-rtti -Wall -Wextra -Werror -pedantic`.
+</Note>
+
+---
+
+## Type Introspection
+
+Functions that query properties of a type or value at compile time.
+
+<CardGroup cols={2}>
+  <Card title="reflect::size" href="/api/type-introspection#reflectsize">
+    Returns the number of data members in an aggregate type.
+  </Card>
+  <Card title="reflect::type_name" href="/api/type-introspection#reflecttype_name">
+    Returns the unqualified string name of a type as `std::string_view`.
+  </Card>
+  <Card title="reflect::type_id" href="/api/type-introspection#reflecttype_id--type_id_v">
+    Returns a compile-time unique integer identifier for a type, derived from its name.
+  </Card>
+  <Card title="reflect::type_id_v" href="/api/type-introspection#reflecttype_id--type_id_v">
+    Inline variable template that provides a unique compile-time identity object per type.
+  </Card>
+  <Card title="reflect::visit" href="/api/type-introspection#reflectvisit">
+    Calls a callable with all members of an aggregate expanded as a variadic argument pack.
+  </Card>
+</CardGroup>
+
+---
+
+## Member Access
+
+Functions that address individual members by index or name.
+
+<CardGroup cols={2}>
+  <Card title="reflect::member_name" href="/api/member-access#reflectmember_name">
+    Returns the string name of the Nth data member of an aggregate.
+  </Card>
+  <Card title="reflect::get&lt;N&gt;" href="/api/member-access#reflectget-by-index">
+    Accesses the Nth member of an aggregate by compile-time index.
+  </Card>
+  <Card title="reflect::get&lt;&quot;name&quot;&gt;" href="/api/member-access#reflectget-by-name">
+    Accesses a member of an aggregate by compile-time string name.
+  </Card>
+  <Card title="reflect::has_member_name" href="/api/member-access#reflecthas_member_name">
+    Concept that is satisfied when type `T` has a data member with the given name.
+  </Card>
+  <Card title="reflect::index_of" href="/api/member-access#reflectindex_of">
+    Returns the zero-based index of a named member within an aggregate.
+  </Card>
+  <Card title="reflect::member_type" href="/api/member-access#reflectmember_type">
+    Type alias that resolves to the (cvref-stripped) type of the Nth member.
+  </Card>
+</CardGroup>
+
+---
+
+## Enum Reflection
+
+Functions that introspect enumeration types.
+
+<CardGroup cols={2}>
+  <Card title="reflect::to_underlying" href="/api/enum-reflection#reflectto_underlying">
+    Converts an enum value to its underlying integer type.
+  </Card>
+  <Card title="reflect::enum_min / enum_max" href="/api/enum-reflection#reflectenum_min--enum_max">
+    Customization points that define the search range used by `enum_name`.
+  </Card>
+  <Card title="reflect::enum_name" href="/api/enum-reflection#reflectenum_name">
+    Returns the string name of an enum enumerator, or a configurable fallback string.
+  </Card>
+  <Card title="reflect::enumerators" href="/api/enum-reflection#reflectenumerators-variable-template">
+    A `constexpr` array of all valid enumerators as `(underlying_value, name)` pairs.
+  </Card>
+</CardGroup>
+
+---
+
+## Struct Operations
+
+Functions that operate on whole aggregates.
+
+<CardGroup cols={2}>
+  <Card title="reflect::copy" href="/api/struct-operations#reflectcopy">
+    Copies matching members (by name) from one aggregate to another, optionally filtered to a named subset.
+  </Card>
+  <Card title="reflect::to&lt;tuple&gt;" href="/api/struct-operations#reflectto-tuple-conversion">
+    Converts an aggregate to `std::tuple`, preserving value/reference category.
+  </Card>
+  <Card title="reflect::to&lt;Struct&gt;" href="/api/struct-operations#reflectto-struct-conversion">
+    Converts an aggregate to another aggregate type by copying members with matching names.
+  </Card>
+</CardGroup>
+
+---
+
+## Iteration
+
+Functions for iterating over all members with a compile-time index.
+
+<CardGroup cols={1}>
+  <Card title="reflect::for_each" href="/api/iteration#reflectfor_each">
+    Invokes a callback once per member, passing a `std::integral_constant` index that can be used with `get`, `member_name`, `size_of`, etc.
+  </Card>
+</CardGroup>
+
+---
+
+## Layout Queries
+
+Functions that return per-member memory layout information.
+
+<CardGroup cols={2}>
+  <Card title="reflect::size_of" href="/api/layout-queries#reflectsize_of">
+    Returns `sizeof` for a member identified by index or name.
+  </Card>
+  <Card title="reflect::align_of" href="/api/layout-queries#reflectalign_of">
+    Returns `alignof` for a member identified by index or name.
+  </Card>
+  <Card title="reflect::offset_of" href="/api/layout-queries#reflectoffset_of">
+    Returns the byte offset of a member within its containing struct.
+  </Card>
+</CardGroup>
+
+---
+
+## `constexpr` and `[[nodiscard]]` guarantees
+
+Every public function in the `reflect` namespace is marked `[[nodiscard]] constexpr`. The library compiles without exceptions or RTTI, so it works cleanly with `-fno-exceptions -fno-rtti`.
+
+`type_id_v` is an inline variable template (not a function) and has no call overhead at all.
+
+The library verifies its own behaviour via `static_assert` on every include. Pass `-DNTEST` to skip these checks and reduce compile time.

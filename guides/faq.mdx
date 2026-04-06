@@ -1,0 +1,231 @@
+---
+title: FAQ
+description: Frequently asked questions about qlibs/reflect — how it works, its limitations, compiler agnosticism, and comparison with similar libraries.
+---
+
+<AccordionGroup>
+
+<Accordion title="How does reflect compare to P2996 (Reflection for C++26)?">
+
+`reflect` provides a minimal set of reflection primitives implemented entirely in C++20, using structured bindings, concepts, and `std::source_location` as building blocks. It works today on gcc-12+, clang-15+, and msvc-19.36+, but it relies on hacks and workarounds to compensate for the absence of native reflection support in the language.
+
+[P2996](https://wg21.link/P2996) is a language-level proposal being considered for C++26. It provides a far richer feature set: reflection over namespaces, functions, base classes, access specifiers, templates, attributes, and more. P2996 is a proper language extension — there is nothing a library can do to replicate it fully.
+
+**Summary:**
+
+| | `reflect` | P2996 |
+|---|---|---|
+| Available today | Yes (C++20) | No (C++26 proposal) |
+| Aggregates only | Yes | No — all types |
+| Member names | Yes | Yes |
+| Base classes | Partial | Full |
+| Function reflection | No | Yes |
+| Access specifiers | No | Yes |
+| Standard | No (library) | Yes (language) |
+
+`reflect` is a pragmatic tool for today. Once P2996 ships in a major compiler, most use cases covered by `reflect` will be better served by the language feature.
+
+</Accordion>
+
+<Accordion title="How does reflect work under the hood?">
+
+`reflect` combines three C++20 features:
+
+**1. Structured bindings** decompose an aggregate into its members:
+```cpp
+struct foo { int a; float b; };
+auto&& [a, b] = foo{};
+```
+
+`reflect` pre-generates 65 `visit` overloads (for 0–64 members), each doing exactly the right number of bindings. The correct overload is selected at compile time via `std::integral_constant` dispatch.
+
+**2. `std::source_location::function_name()`** returns the decorated name of any template function, with the template arguments embedded in the string. `reflect` calls this with sentinel types (`REFLECT_STRUCT`, `REFLECT_STRUCT::ENUM`, etc.) to learn how the current compiler formats type and member names, then uses that prefix/suffix to extract user-defined names from the same mechanism.
+
+**3. Concepts** power the `size()` function, which counts aggregate members without macros by probing how many initializers `T{...}` accepts, using a universal `any` type that converts to anything and an `any_except_base_of<T>` that cannot convert to base classes.
+
+See the [How It Works](/guides/how-it-works) guide for a full walkthrough with code excerpts.
+
+</Accordion>
+
+<Accordion title="How can reflect be agnostic to compiler changes?">
+
+`reflect` never hard-codes the format of `source_location::function_name()` output. Instead, it **precomputes** the required prefixes and suffixes on every include by instantiating template functions with known sentinel types (`REFLECT_STRUCT`, `REFLECT_STRUCT::ENUM::VALUE`, etc.) and searching for those known strings in the output.
+
+For example, the `type_name_info` struct for class types:
+
+```cpp
+template<class T> requires std::is_class_v<T>
+struct type_name_info<T> {
+  static constexpr auto name  = function_name<REFLECT_STRUCT>();
+  static constexpr auto begin = name.find("REFLECT_STRUCT");
+  static constexpr auto end   = name.substr(begin + std::size(std::string_view{"REFLECT_STRUCT"}));
+};
+```
+
+Whatever the compiler writes before and after `REFLECT_STRUCT` in the function name is the prefix and suffix that all other class type names will use. If a future compiler version changes its function name format, the precomputed offsets automatically adapt — no `#ifdef` required, no `reflect` update needed.
+
+The self-test suite (see next question) then verifies that the extraction actually produces correct results on the current compiler/version.
+
+</Accordion>
+
+<Accordion title="What does it mean that reflect tests itself upon include?">
+
+Every `#include <reflect>` (unless `-DNTEST` is defined) compiles and evaluates hundreds of `static_assert` checks covering the entire public API:
+
+```cpp
+static_assert(([] {
+  using namespace reflect;
+
+  static_assert(std::string_view{"int"}  == type_name<int>());
+  static_assert(std::string_view{"foo"}  == type_name<reflect::test::foo>());
+  static_assert(std::string_view{"i"}    == member_name<0, struct { int i; }>());
+  static_assert(std::string_view{"foo"}  == enum_name<foobar,"",1,2>(foobar::foo));
+  // ... hundreds more
+  return true;
+}(), true));
+```
+
+**What this guarantees:** if the include compiles without error, every reflected operation (`type_name`, `member_name`, `enum_name`, `size`, `visit`, `get`, `copy`, `to`, layout queries) works correctly on the exact compiler, version, flags, and platform being used.
+
+**What it does not guarantee:** correctness on a different compiler, or on the same compiler with a future update. That is why the tests run on every include rather than being a one-time CI check.
+
+</Accordion>
+
+<Accordion title="What is the compile-time overhead of reflect?">
+
+Including `<reflect>` takes approximately:
+
+| Compiler | With tests | Without tests (`-DNTEST`) |
+|---|---|---|
+| g++-13.2   | ~0.25s | ~0.11s |
+| clang++-17 | ~0.32s | ~0.12s |
+
+The baseline (~0.12s) is the cost of parsing the header and instantiating the library's templates. The remaining ~0.13–0.20s comes from running the self-test suite.
+
+The most expensive individual operations at compile time are:
+- `visit` / `for_each` — cost scales with the number of members (one `detail::visit` overload is instantiated per call site)
+- `enum_name` — cost scales with `Max - Min` (one template instantiation per candidate value)
+
+There are **no recursive template instantiations** in the library. The `size()` counting algorithm is a constexpr value-level recursion (a chain of `if constexpr` branches in a single function), not a type-level recursion. This keeps symbol table sizes small.
+
+</Accordion>
+
+<Accordion title="Can I disable running tests at compile-time?">
+
+Yes. Define `NTEST` before including or pass it on the command line:
+
+```bash
+g++ -std=c++20 -DNTEST main.cpp
+```
+
+This removes all `static_assert` tests from compilation, reducing include time from ~0.25s to ~0.12s (GCC) or ~0.32s to ~0.12s (Clang).
+
+<Warning>
+With `-DNTEST` there is no compile-time guarantee that `reflect` works correctly on your specific compiler and environment. The library uses `source_location::function_name()` in ways that depend on the exact output format of your compiler version. A compiler update that changes its name mangling could silently break reflection without `-DNTEST` catching it.
+
+Best practice: keep tests enabled in development and debug builds. Enable `-DNTEST` only in release/CI builds after confirming a full (test-enabled) build passes.
+</Warning>
+
+</Accordion>
+
+<Accordion title="How do I extend the number of members to be reflected (default: 64)?">
+
+The built-in `visit` handles structs with 0–64 members via a pre-generated dispatch table. For larger structs, override `visit` in `namespace reflect`.
+
+**Option 1: Using P1061 pack-in-structured-bindings** (supported by some compilers today as an extension; see [Godbolt](https://godbolt.org/z/Ga3bc3KKW)):
+
+```cpp
+namespace reflect {
+template <class Fn, class T>
+[[nodiscard]] constexpr decltype(auto) visit(Fn&& fn, T&& t) {
+  auto&& [... ts] = std::forward<T>(t);
+  return std::forward<Fn>(fn)(std::forward_like<T>(ts)...);
+}
+} // namespace reflect
+```
+
+**Option 2: Extend the dispatch table manually** by appending additional `detail::visit` overloads following the same pattern used for sizes 1–64.
+
+When `__cpp_structured_bindings >= 202601L` (P1061 officially adopted), `reflect` automatically uses the pack syntax and the 64-member limit is lifted. The `#if` guard is already in the source.
+
+</Accordion>
+
+<Accordion title="What are similar projects?">
+
+Several other C++ reflection libraries take different approaches:
+
+<CardGroup cols={2}>
+
+<Card title="boost.pfr" href="https://github.com/boostorg/pfr">
+Aggregate reflection using structured bindings, similar technique to `reflect`. Part of Boost. Focuses on field access and type names; does not include enum reflection or the self-verification mechanism.
+</Card>
+
+<Card title="glaze" href="https://github.com/stephenberry/glaze">
+Extremely fast JSON/CSV/binary serialization library that uses its own aggregate reflection internally. Broader scope than `reflect` — a full serialization framework rather than a reflection primitive.
+</Card>
+
+<Card title="reflect-cpp" href="https://github.com/getml/reflect-cpp">
+Reflection-based serialization supporting JSON, CBOR, MessagePack, XML, and more. Uses `source_location`-based techniques similar to `reflect`. Heavier dependency footprint.
+</Card>
+
+<Card title="magic_enum" href="https://github.com/Neargye/magic_enum">
+Focused specifically on enum reflection — `enum_name`, enum iteration, `enum_cast`. Uses `source_location` / `__PRETTY_FUNCTION__` similarly to `reflect`'s enum support. Does not cover struct reflection.
+</Card>
+
+</CardGroup>
+
+`reflect` distinguishes itself by being minimal (single header, no dependencies), providing the self-verification mechanism, and covering both struct and enum reflection in a compiler-agnostic way.
+
+</Accordion>
+
+<Accordion title="Does reflect work with inheritance?">
+
+Partially. `reflect` works with **aggregate** types as defined by the C++ standard, and C++20 relaxed the aggregate rules to allow base classes (as long as there are no user-provided constructors, `virtual` functions, or `private`/`protected` non-static data members in the base).
+
+The `size()` function explicitly accounts for base classes using `any_except_base_of<T>`, which cannot convert to types that are base classes of `T`. This lets the member-counting algorithm skip base-class "slots" and count only the actual data members:
+
+```cpp
+struct Base {};
+struct Derived : Base { int a; float b; };
+
+static_assert(2 == reflect::size<Derived>()); // correctly 2, not 3
+```
+
+However, `reflect` does not currently provide separate access to base-class members — `size()`, `member_name()`, and `get()` operate on the data members declared directly in the most-derived type. Base-class members that are aggregated into the derived struct layout are not separately enumerable.
+
+<Note>
+Complex inheritance hierarchies (multiple bases, virtual bases, bases with members) may not be fully supported. Test your specific class hierarchy with the self-test suite enabled.
+</Note>
+
+</Accordion>
+
+<Accordion title="Does reflect work with non-aggregate types like std::pair and std::tuple?">
+
+`std::pair` and `std::tuple` are not aggregates under the C++ standard, but `reflect` has explicit special support for them via `is_unnamed_record_type_v`:
+
+```cpp
+template<typename T>
+inline constexpr bool is_unnamed_record_type_v = false;
+
+template<typename... Ts>
+inline constexpr bool is_unnamed_record_type_v<std::pair<Ts...>> = true;
+
+template<typename... Ts>
+inline constexpr bool is_unnamed_record_type_v<std::tuple<Ts...>> = true;
+```
+
+Any type for which `is_unnamed_record_type_v<T>` is `true` is treated as "record-like" by `reflect::visit`, `reflect::size`, and `reflect::get`. For these types, `size` delegates to `std::tuple_size_v` and `visit` uses the same structured-binding dispatch:
+
+```cpp
+using ts = std::tuple<int, float, double>;
+static_assert(3 == reflect::size<ts>());
+static_assert(3 == reflect::visit(
+  [](auto&&... args) { return sizeof...(args); }, ts{}
+));
+```
+
+For arbitrary non-aggregate types other than `pair`/`tuple`, `reflect` does not provide support — there is no standard C++20 mechanism to decompose them without language reflection.
+
+</Accordion>
+
+</AccordionGroup>

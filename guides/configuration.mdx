@@ -1,0 +1,149 @@
+---
+title: Configuration
+description: All compile-time configuration options for qlibs/reflect — enum range macros, NTEST, and extending the member limit.
+---
+
+`reflect` has minimal configuration surface. All options are set via preprocessor defines before including the header.
+
+## Enum range macros
+
+```cpp
+#define REFLECT_ENUM_MIN 0    // default: 0
+#define REFLECT_ENUM_MAX 128  // default: 128
+```
+
+`enum_name` works by iterating over integer values in the range `[enum_min, enum_max]`, calling `source_location::function_name()` for each candidate, and checking whether the result looks like a valid named enumerator (no `(` without `)`, etc.). The range determines how many candidates are probed.
+
+**Override globally at compile time:**
+
+```bash
+g++ -std=c++20 -DREFLECT_ENUM_MIN=-1 -DREFLECT_ENUM_MAX=32 main.cpp
+```
+
+**Or set them before the include in a source file:**
+
+```cpp
+#define REFLECT_ENUM_MIN -1
+#define REFLECT_ENUM_MAX 32
+#include <reflect>
+```
+
+<Warning>
+Setting a very large range (e.g., `REFLECT_ENUM_MAX=1024`) dramatically increases the number of template instantiations and will slow down compilation. Prefer per-type overrides for enums with large or non-contiguous ranges.
+</Warning>
+
+### Default enum_max clamp
+
+The actual upper bound used is the minimum of `REFLECT_ENUM_MAX` and the maximum value of the enum's underlying type. The built-in `enum_max` is defined as:
+
+```cpp
+template<class E, class T = std::underlying_type_t<E>>
+  requires std::is_enum_v<E>
+[[nodiscard]] consteval auto enum_max(E) -> int {
+  return std::numeric_limits<T>::max() < REFLECT_ENUM_MAX
+    ? std::numeric_limits<T>::max()
+    : REFLECT_ENUM_MAX;
+}
+```
+
+This means an `enum class E : uint8_t` will never probe beyond 255 even if `REFLECT_ENUM_MAX` is set to 1024.
+
+---
+
+## Custom enum_min / enum_max per type
+
+For enums with non-contiguous or large ranges, override the `enum_min` / `enum_max` ADL customization points for the specific enum type. These must be `consteval` and visible at the call site:
+
+```cpp
+enum class Enum { foo = 1, bar = 1024 };
+
+consteval auto enum_min(Enum) { return Enum::foo; }
+consteval auto enum_max(Enum) { return Enum::bar; }
+
+static_assert(std::string_view{"foo"} == reflect::enum_name(Enum::foo));
+static_assert(std::string_view{"bar"} == reflect::enum_name(Enum::bar));
+```
+
+`enum_name` uses `enum_min(E{})` and `enum_max(E{})` as default template arguments, so your overloads are picked up automatically via ADL.
+
+<Note>
+The overloads can return either the enum type (as above) or an integer — whatever makes the range bounds clearest for your use case.
+</Note>
+
+**Full example — sparse enum with negative values:**
+
+```cpp
+enum class Status { unknown = -1, ok = 0, err = 1 };
+
+consteval auto enum_min(Status) { return -1; }
+consteval auto enum_max(Status) { return  1; }
+
+static_assert("unknown" == reflect::enum_name(Status::unknown));
+static_assert("ok"      == reflect::enum_name(Status::ok));
+static_assert("err"     == reflect::enum_name(Status::err));
+```
+
+---
+
+## NTEST — disabling compile-time self-tests
+
+By default, `reflect` runs its entire test suite via `static_assert` on every include. Compilation times with and without tests:
+
+```bash
+time g++-13.2     -x c++ -std=c++20 reflect -c           # 0.253s (with tests)
+time g++-13.2     -x c++ -std=c++20 reflect -c -DNTEST   # 0.113s (without tests)
+
+time clang++-17   -x c++ -std=c++20 reflect -c           # 0.322s (with tests)
+time clang++-17   -x c++ -std=c++20 reflect -c -DNTEST   # 0.119s (without tests)
+```
+
+Disable the test suite:
+
+```bash
+g++ -std=c++20 -DNTEST main.cpp
+```
+
+Or in a precompiled header / module environment, define it project-wide via your build system.
+
+<Warning>
+When `-DNTEST` is set, there is no compile-time guarantee that the library works correctly on your specific compiler and environment. Use `-DNTEST` only after verifying that a full build (without `NTEST`) passes. A reasonable practice is to leave tests enabled in debug/developer builds and disable them only in CI release builds after initial validation.
+</Warning>
+
+---
+
+## Extending the member limit (default: 64)
+
+The built-in `visit` supports up to 64 members. If your struct has more, you have two options:
+
+### Option 1: P1061 pack-in-bindings (future standard)
+
+When the compiler supports [P1061](https://wg21.link/P1061) (`__cpp_structured_bindings >= 202601L`), `reflect` already uses it automatically — the visit dispatch table is bypassed entirely:
+
+```cpp
+// Inside reflect's visit (already guarded by #if)
+#if (__cpp_structured_bindings >= 202601L)
+  auto&& [... ts] = REFLECT_FWD(t);
+  return REFLECT_FWD(fn)(REFLECT_FWD_LIKE(T, ts)...);
+#endif
+```
+
+### Option 2: Override visit in your project
+
+Provide your own `visit` overload in `namespace reflect` before (or after) including the header, or in a wrapper header. A P1061-style override looks like:
+
+```cpp
+// requires a compiler with P1061 support
+namespace reflect {
+template <class Fn, class T>
+[[nodiscard]] constexpr decltype(auto) visit(Fn&& fn, T&& t) {
+  auto&& [... ts] = std::forward<T>(t);
+  return std::forward<Fn>(fn)(std::forward_like<T>(ts)...);
+}
+} // namespace reflect
+```
+
+See the [Godbolt demo](https://godbolt.org/z/Ga3bc3KKW) for a live example.
+
+<Note>
+If you need more than 64 members today (without P1061), you can also extend the dispatch table by appending additional `detail::visit` overloads for sizes 65+, following the same pattern used for 1–64.
+</Note>

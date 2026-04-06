@@ -1,0 +1,341 @@
+---
+title: How It Works
+description: A deep dive into the C++20 techniques that power qlibs/reflect — structured bindings, source_location, concept-based member counting, and self-verification.
+---
+
+`reflect` achieves static reflection without macros, code generation, or compiler extensions by composing three C++20 features: structured bindings, `std::source_location`, and concepts. This page walks through each technique with actual implementation excerpts.
+
+<AccordionGroup>
+
+<Accordion title="Structured bindings for aggregate decomposition">
+
+C++20 structured bindings can decompose any aggregate type into its members:
+
+```cpp
+struct foo { int a; float b; };
+auto&& [a, b] = foo{};
+// a is int&, b is float&
+```
+
+`reflect` exploits this to build the `visit` function, which decomposes a struct and passes all members as a variadic pack to a callable. The implementation pre-generates 65 overloads (0–64 members), each selecting the right binding count via `std::integral_constant`:
+
+```cpp
+// detail namespace — selected by integral_constant dispatch
+template<class Fn, class T>
+[[nodiscard]] constexpr decltype(auto)
+visit(Fn&& fn, T&& t, std::integral_constant<std::size_t, 1>) {
+  auto&& [_1] = REFLECT_FWD(t);
+  return REFLECT_FWD(fn)(REFLECT_FWD_LIKE(T, _1));
+}
+
+template<class Fn, class T>
+[[nodiscard]] constexpr decltype(auto)
+visit(Fn&& fn, T&& t, std::integral_constant<std::size_t, 2>) {
+  auto&& [_1, _2] = REFLECT_FWD(t);
+  return REFLECT_FWD(fn)(REFLECT_FWD_LIKE(T, _1), REFLECT_FWD_LIKE(T, _2));
+}
+// ... up to 64
+```
+
+The public `visit` calls `size<T>()` at compile time, then dispatches to the right overload:
+
+```cpp
+template<class Fn, class T>
+  requires is_record_like_type_v<std::remove_cvref_t<T>>
+[[nodiscard]] constexpr decltype(auto) visit(Fn&& fn, T&& t) {
+  return detail::visit(
+    REFLECT_FWD(fn),
+    REFLECT_FWD(t),
+    std::integral_constant<std::size_t, size<std::remove_cvref_t<T>>()>{}
+  );
+}
+```
+
+`REFLECT_FWD_LIKE` preserves value category (lvalue/rvalue) from the outer `T&&` — this is what makes `to<std::tuple>(f)` produce a tuple of references when `f` is an lvalue, while `to<std::tuple>(foo{})` produces a tuple by value.
+
+<Note>
+When the compiler implements P1061 (pack-in-structured-bindings, `__cpp_structured_bindings >= 202601L`), the entire dispatch table collapses to a single three-line implementation. The `#if` guard is already in the source.
+</Note>
+
+</Accordion>
+
+<Accordion title="source_location::function_name() for type and member names">
+
+`std::source_location::current().function_name()` returns the full decorated name of the current function as a compile-time string. `reflect` turns this into a portable name-extraction mechanism.
+
+The key helper:
+
+```cpp
+template<auto...  Vs>
+[[nodiscard]] constexpr auto function_name() noexcept -> std::string_view {
+  return std::source_location::current().function_name();
+}
+
+template<class... Ts>
+[[nodiscard]] constexpr auto function_name() noexcept -> std::string_view {
+  return std::source_location::current().function_name();
+}
+```
+
+When instantiated as `function_name<MyType>()`, the compiler embeds the name of `MyType` inside the function name string. For example, on GCC it might look like:
+
+```
+constexpr std::string_view reflect::detail::function_name() [with Ts = {foo}]
+```
+
+On Clang:
+```
+std::string_view reflect::detail::function_name() [Ts = <foo>]
+```
+
+`reflect` never hard-codes these prefixes/suffixes. Instead it uses **sentinel types** to precompute them at include time.
+
+</Accordion>
+
+<Accordion title="Compiler-agnostic prefix/postfix precomputation">
+
+Rather than adding `#ifdef __clang__` / `#ifdef __GNUC__` branches, `reflect` uses sentinel types placed in the global namespace to locate names within the `function_name()` output:
+
+```cpp
+struct REFLECT_STRUCT {
+  void* MEMBER;
+  enum class ENUM { VALUE };
+};
+```
+
+The `type_name_info` struct precomputes the prefix and suffix for each category of type:
+
+```cpp
+// For plain types (non-class, non-enum): calibrate using `int`
+template<class T>
+struct type_name_info {
+  static constexpr auto name  = function_name<int>();
+  static constexpr auto begin = name.find("int");
+  static constexpr auto end   = name.substr(begin + std::size(std::string_view{"int"}));
+};
+
+// For class types: calibrate using REFLECT_STRUCT
+template<class T> requires std::is_class_v<T>
+struct type_name_info<T> {
+  static constexpr auto name  = function_name<REFLECT_STRUCT>();
+  static constexpr auto begin = name.find("REFLECT_STRUCT");
+  static constexpr auto end   = name.substr(begin + std::size(std::string_view{"REFLECT_STRUCT"}));
+};
+
+// For enum types: calibrate using REFLECT_STRUCT::ENUM
+template<class T> requires std::is_enum_v<T>
+struct type_name_info<T> {
+  static constexpr auto name  = function_name<REFLECT_STRUCT::ENUM>();
+  static constexpr auto begin = name.find("REFLECT_STRUCT::ENUM");
+  static constexpr auto end   = name.substr(begin + std::size(std::string_view{"REFLECT_STRUCT::ENUM"}));
+};
+```
+
+Similarly for enum values:
+
+```cpp
+struct enum_name_info {
+  static constexpr auto name  = function_name<REFLECT_STRUCT::ENUM::VALUE>();
+  static constexpr auto begin = name.find("REFLECT_STRUCT::ENUM::VALUE");
+  static constexpr auto end   = std::size(name) - (
+    name.find("REFLECT_STRUCT::ENUM::VALUE") +
+    std::size(std::string_view{"REFLECT_STRUCT::ENUM::VALUE"})
+  );
+};
+```
+
+And for member names (using a reference-wrapper sentinel to force a member access into the function name):
+
+```cpp
+template<class T> struct ref { T& ref_; };
+template<class T> ref(T&) -> ref<T>;
+
+struct member_name_info {
+  // function_name is instantiated with a ref to REFLECT_STRUCT::MEMBER
+  static constexpr auto name  = function_name<ref{ext<REFLECT_STRUCT>.MEMBER}>();
+  static constexpr auto begin = name[name.find("MEMBER") - 1]; // separator char
+  static constexpr auto end   = name.substr(name.find("MEMBER") + std::size(std::string_view{"MEMBER"}));
+};
+```
+
+When a compiler update changes the function name format, the precomputed `begin`/`end` values automatically adapt — no maintenance required.
+
+</Accordion>
+
+<Accordion title="Counting aggregate members with any/any_except_base_of">
+
+`reflect::size<T>()` counts how many data members an aggregate has without macros. The approach uses C++20 concepts to probe how many initializers `T{...}` accepts:
+
+```cpp
+namespace detail {
+struct any {
+  template<class T> operator T() const noexcept;
+};
+
+template<class T>
+struct any_except_base_of {
+  template<class U>
+    requires (not std::is_base_of_v<U, T>)
+  operator U() const noexcept;
+};
+
+template<class T, std::size_t Bases = 0u, class... Ts>
+  requires std::is_aggregate_v<T>
+[[nodiscard]] constexpr auto size() -> std::size_t {
+  if constexpr (
+    requires { T{Ts{}...}; } and
+    not requires { T{Ts{}..., detail::any{}}; }
+  ) {
+    // Can't add another initializer — we've saturated the member list
+    return sizeof...(Ts) - Bases;
+
+  } else if constexpr (
+    Bases == sizeof...(Ts) and
+    requires { T{Ts{}...}; } and
+    not requires { T{Ts{}..., detail::any_except_base_of<T>{}}; }
+  ) {
+    // The "stuck" initializer must be a base class — skip it
+    return size<T, Bases + 1u, Ts..., detail::any>();
+
+  } else {
+    // Keep adding initializers
+    return size<T, Bases, Ts..., detail::any>();
+  }
+}
+} // namespace detail
+```
+
+**How it works step by step:**
+
+1. Start with zero initializers. Try adding `any{}` one at a time.
+2. `any` converts to any type, so `T{any{}, any{}}` succeeds for a two-member struct.
+3. When adding another `any{}` fails (the struct is full), the count of initializers minus base-class slots is the member count.
+4. `any_except_base_of<T>` cannot convert to base classes of `T`, which lets the algorithm detect when a "slot" is consumed by inheritance rather than a data member.
+
+This means `size()` handles structs with base classes, non-default-constructible member types, deleted copy constructors, user-provided constructors in members, and bitfields — all without recursion in the traditional TMP sense.
+
+<Note>
+There are no recursive template instantiations. The `size()` helper is a constexpr function that recurses at the value level, not by instantiating new template specializations each time. This is why compile times remain low.
+</Note>
+
+</Accordion>
+
+<Accordion title="visit dispatch via integral_constant">
+
+After `size<T>()` returns a compile-time `std::size_t`, `reflect` dispatches to the correct structured-binding overload by constructing an `std::integral_constant`:
+
+```cpp
+// Public entry point
+template<class Fn, class T>
+  requires is_record_like_type_v<std::remove_cvref_t<T>>
+[[nodiscard]] constexpr decltype(auto) visit(Fn&& fn, T&& t) {
+  return detail::visit(
+    REFLECT_FWD(fn),
+    REFLECT_FWD(t),
+    std::integral_constant<std::size_t, size<std::remove_cvref_t<T>>()>{}
+  );
+}
+```
+
+Because the size is a non-type template argument, the compiler selects exactly one overload from the 65 pre-generated ones. There is no runtime branching, no virtual dispatch, and no template recursion — the function call resolves entirely at compile time.
+
+Value-category forwarding uses a custom `REFLECT_FWD_LIKE` that replicates `std::forward_like` without depending on C++23:
+
+```cpp
+template<bool Cond>
+struct REFLECT_FWD_LIKE {
+  template<class T>
+  using type = std::remove_reference_t<T>&&; // rvalue
+};
+template<>
+struct REFLECT_FWD_LIKE<true> {
+  template<class T>
+  using type = std::remove_reference_t<T>&;  // lvalue
+};
+
+#define REFLECT_FWD_LIKE(T, ...) \
+  static_cast<typename ::REFLECT_FWD_LIKE<::std::is_lvalue_reference_v<T>> \
+    ::template type<decltype(__VA_ARGS__)>>(__VA_ARGS__)
+```
+
+This ensures that when you call `visit` on an lvalue struct, each member is forwarded as an lvalue reference, and when you call it on an rvalue, each member is forwarded as an rvalue reference.
+
+</Accordion>
+
+<Accordion title="member_name via function_name + nth_pack_element">
+
+`member_name<N, T>()` works by selecting the Nth member of `T` via `visit`, wrapping it in a `ref` sentinel, then calling `function_name<>()` on that ref so the member's identifier appears in the function name string:
+
+```cpp
+template<std::size_t N, class T>
+  requires (std::is_aggregate_v<std::remove_cvref_t<T>> and N < size<T>())
+[[nodiscard]] constexpr auto member_name() noexcept -> std::string_view {
+  constexpr std::string_view fn =
+    detail::function_name<
+      detail::ref{
+        visit(detail::nth_pack_element<N>, detail::ext<std::remove_cvref_t<T>>)
+      }
+    >();
+  constexpr std::string_view tmp =
+    fn.substr(0, fn.find(detail::member_name_info::end));
+  constexpr std::string_view name =
+    tmp.substr(tmp.find_last_of(detail::member_name_info::begin) + 1);
+  static_assert(std::size(name) > 0u);
+  // ...
+}
+```
+
+`nth_pack_element<N>` is a lambda that, given a variadic pack, returns the Nth element:
+
+```cpp
+template<std::size_t N>
+inline constexpr auto nth_pack_element =
+  []<auto... Ns>(std::index_sequence<Ns...>) noexcept -> decltype(auto) {
+    return [](const auto_<Ns>&..., auto&& nth, const auto&...) noexcept -> decltype(auto) {
+      return REFLECT_FWD(nth);
+    };
+  }(std::make_index_sequence<N>{});
+```
+
+`detail::ext<T>` is an `extern const T` with no definition — it is never ODR-used at runtime, only used as a type probe in non-evaluated contexts (unevaluated operands / `consteval` calls).
+
+</Accordion>
+
+<Accordion title="Self-verification via static_assert on include">
+
+Every assertion in `reflect` is wrapped in a single large `static_assert` lambda at the bottom of the header (guarded by `#ifndef NTEST`):
+
+```cpp
+#ifndef NTEST
+static_assert(([] {
+  using namespace reflect;
+
+  // nth_pack_element
+  static_assert(1 == nth_pack_element<0>(1));
+  static_assert(2 == nth_pack_element<1>(1, 2));
+
+  // size
+  static_assert(0 == size<empty>());
+  static_assert(2 == size<two>());
+
+  // type_name
+  static_assert(std::string_view{"int"} == type_name<int>());
+  static_assert(std::string_view{"foo"} == type_name<reflect::test::foo>());
+
+  // member_name
+  static_assert(std::string_view{"i"} == member_name<0, foo>());
+
+  // enum_name
+  static_assert(std::string_view{"foo"} == enum_name<foobar,"",1,2>(foobar::foo));
+
+  // ... hundreds more assertions ...
+  return true;
+}(), true));
+#endif
+```
+
+This runs on every `#include <reflect>` (unless `-DNTEST`). If any assertion fails, the compilation fails with a descriptive static_assert error — guaranteeing the library behaves correctly on the exact compiler/flags/platform being used.
+
+</Accordion>
+
+</AccordionGroup>

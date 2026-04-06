@@ -1,0 +1,235 @@
+---
+title: "Struct Operations"
+description: "Functions for copying members between aggregates and converting aggregates to tuples or other struct types."
+---
+
+## reflect::copy
+
+Copies data members from a source aggregate to a destination aggregate by matching member names. An optional list of member name strings can be provided to restrict which members are copied.
+
+```cpp
+template <fixed_string... Members, class TSrc, class TDst>
+constexpr auto copy(const TSrc& src, TDst& dst) -> void;
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `Members...` | Zero or more compile-time member name strings. When empty, all members present in both `TSrc` and `TDst` with matching names are copied. When non-empty, only the listed names are considered. Names that exist in the filter list but are absent in either struct (or have incompatible types) are silently ignored. |
+  | `TSrc` | Source aggregate type. Must satisfy `std::is_aggregate_v<TSrc>`. |
+  | `TDst` | Destination aggregate type. Must satisfy `std::is_aggregate_v<TDst>`. |
+</Accordion>
+
+**Return value** — `void`.
+
+<Note>
+  `copy` only assigns a destination member when the source has a member with the same name **and** the assignment is well-formed (checked via a `requires` expression). Members with matching names but incompatible types are silently skipped.
+</Note>
+
+<Tabs>
+  <Tab title="Copy all matching members">
+    ```cpp
+    struct foo { int a; int b; };
+    struct bar { int a{}; int b{}; };
+
+    foo f{.a = 1, .b = 2};
+    bar b{};
+    reflect::copy(f, b);
+
+    assert(b.a == f.a); // 1
+    assert(b.b == f.b); // 2
+    ```
+  </Tab>
+  <Tab title="Copy specific members">
+    ```cpp
+    struct foo { int a; int b; };
+    struct bar { int a{}; int b{}; };
+
+    const foo f{.a = 1, .b = 2};
+    bar b{};
+    b.b = 42; // preserve b.b
+
+    reflect::copy<"a">(f, b); // only copy member "a"
+
+    assert(b.a == f.a); // 1 — copied
+    assert(42 == b.b);  // 42 — not overwritten
+    ```
+  </Tab>
+  <Tab title="Multiple named members">
+    ```cpp
+    struct foo { int a; int b; };
+    struct bar { int a{}; int b{}; };
+
+    const foo f{.a = 1, .b = 2};
+    bar b{};
+
+    reflect::copy<"a", "b">(f, b);
+    assert(b.a == f.a);
+    assert(b.b == f.b);
+    ```
+  </Tab>
+  <Tab title="Non-overlapping structs">
+    ```cpp
+    struct foo { int a; int b; };
+    struct baz { int a{}; int c{}; };
+
+    const foo f{.a = 4, .b = 2};
+    baz z{};
+
+    // "b" in foo has no match in baz; "c" in baz has no match in foo
+    reflect::copy(f, z);
+    assert(z.a == 4); // copied
+    assert(z.c == 0); // unchanged — no matching source member
+    ```
+  </Tab>
+  <Tab title="Ignored names">
+    ```cpp
+    struct foo { int a; int b; };
+    struct bar { int a{}; int b{}; };
+
+    const foo f{.a = 1, .b = 2};
+    bar b{};
+
+    // "c" doesn't exist in either struct — silently ignored
+    reflect::copy<"a", "c", "b">(f, b);
+    assert(b.a == f.a);
+    assert(b.b == f.b);
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## reflect::to (tuple conversion)
+
+Converts an aggregate to a `std::tuple` (or any other template that accepts a variadic type list). When called with an lvalue, the tuple elements are lvalue references, preserving reference semantics. When called with an rvalue, elements are value types.
+
+```cpp
+template <template <class...> class R, class T>
+[[nodiscard]] constexpr auto to(T&& t);
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `R` | A template template parameter such as `std::tuple`. Applied as `R<MemberTypes...>` for rvalues and `R<MemberType&...>` for lvalues. |
+  | `T` | An aggregate type. Must satisfy `std::is_aggregate_v<std::remove_cvref_t<T>>`. |
+</Accordion>
+
+**Return value** — An instance of `R<...>` whose elements correspond to the members of `t`.
+
+<Tabs>
+  <Tab title="Compile-time (rvalue)">
+    ```cpp
+    struct foo { int a; int b; };
+
+    constexpr auto t = reflect::to<std::tuple>(foo{.a = 4, .b = 2});
+
+    static_assert(4 == std::get<0>(t));
+    static_assert(2 == std::get<1>(t));
+    ```
+  </Tab>
+  <Tab title="Reference semantics (lvalue)">
+    ```cpp
+    struct foo { int a; int b; };
+
+    auto f = foo{.a = 4, .b = 2};
+    auto t = reflect::to<std::tuple>(f);
+
+    // t holds references into f — mutations are visible through both
+    std::get<0>(t) *= 10;
+    f.b = 42;
+
+    assert(40 == std::get<0>(t) && 40 == f.a);
+    assert(42 == std::get<1>(t) && 42 == f.b);
+    ```
+  </Tab>
+  <Tab title="Const lvalue">
+    ```cpp
+    struct foo { int a; int b; };
+
+    const auto f = foo{.a = 4, .b = 2};
+    auto t = reflect::to<std::tuple>(f);
+
+    assert(f.a == std::get<0>(t));
+    assert(f.b == std::get<1>(t));
+    ```
+  </Tab>
+</Tabs>
+
+<Warning>
+  When `t` is an lvalue, the returned tuple holds **references** into `t`. The tuple must not outlive `t`.
+</Warning>
+
+---
+
+## reflect::to (struct conversion)
+
+Converts an aggregate to another aggregate type by copying members with matching names. Members that exist in the source but not in the destination are ignored. Members that exist in the destination but not in the source remain value-initialised.
+
+```cpp
+template <class R, class T>
+[[nodiscard]] constexpr auto to(T&& t);
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `R` | The destination aggregate type. Must be default-constructible. |
+  | `T` | The source aggregate type. Must satisfy `std::is_aggregate_v<std::remove_cvref_t<T>>`. |
+</Accordion>
+
+**Return value** — A new instance of `R` with matching members copied from `t`. The result is always a value (never a reference), so it is safe to return from functions.
+
+<Tabs>
+  <Tab title="Same member set">
+    ```cpp
+    struct foo { int a; int b; };
+    struct bar { int a{}; int b{}; };
+
+    constexpr auto b = reflect::to<bar>(foo{.a = 4, .b = 2});
+
+    static_assert(4 == b.a);
+    static_assert(2 == b.b);
+    ```
+  </Tab>
+  <Tab title="Partial overlap">
+    ```cpp
+    struct foo { int a; int b; };
+    struct baz { int a{}; int c{}; };
+
+    const auto z = reflect::to<baz>(foo{.a = 4, .b = 2});
+
+    assert(4 == z.a); // copied from foo::a
+    assert(0 == z.c); // value-initialised — no matching source member
+    ```
+  </Tab>
+  <Tab title="Independent lifetime">
+    ```cpp
+    struct foo { int a; int b; };
+    struct bar { int a{}; int b{}; };
+
+    auto f = foo{.a = 4, .b = 2};
+    auto b = reflect::to<bar>(f);
+
+    // b is a separate copy — mutations to f don't affect b
+    f.a = 42;
+    assert(42 == f.a);
+    assert(4  == b.a); // unchanged
+    ```
+  </Tab>
+  <Tab title="Incompatible member types">
+    ```cpp
+    struct foo { int a; int b; };
+    struct foobar {
+      int a{};
+      enum e : int { } b; // strong typedef — conversion disabled
+    };
+
+    const auto fb = reflect::to<foobar>(foo{.a = 4, .b = 2});
+    // foo::b (int) is not assignable to foobar::b (enum e) — silently skipped
+    assert(4 == fb.a);
+    assert(0 == fb.b);
+    ```
+  </Tab>
+</Tabs>

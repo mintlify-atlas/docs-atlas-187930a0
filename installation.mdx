@@ -1,0 +1,174 @@
+---
+title: "Installation"
+description: "Add reflect to your project as a single header file or as a C++20 module. No package manager or build system integration required."
+---
+
+reflect is distributed in two forms: a single header file and a C++20 named module. Both provide the full API.
+
+<Tabs>
+  <Tab title="Single header">
+    ## Single header
+
+    The entire library is one file with no extension. Download it once and add it to any include path.
+
+    <Steps>
+      <Step title="Download the header">
+        ```bash
+        curl -O https://raw.githubusercontent.com/qlibs/reflect/main/reflect
+        ```
+
+        Or copy the file manually from [github.com/qlibs/reflect](https://github.com/qlibs/reflect). Place it anywhere on your include path — for example, `include/reflect`.
+      </Step>
+
+      <Step title="Include it in your source">
+        ```cpp
+        #include <reflect>
+        ```
+
+        The angle-bracket form requires the file's directory to be on the include path. The quoted form also works:
+
+        ```cpp
+        #include "reflect"
+        ```
+      </Step>
+
+      <Step title="Compile with C++20">
+        Pass `-std=c++20` and the include path to your compiler:
+
+        <CodeGroup>
+
+        ```bash GCC
+        g++ -std=c++20 -I/path/to/include your_file.cpp -o your_program
+        ```
+
+        ```bash Clang
+        clang++ -std=c++20 -I/path/to/include your_file.cpp -o your_program
+        ```
+
+        ```bash MSVC
+        cl /std:c++20 /I path\to\include your_file.cpp
+        ```
+
+        </CodeGroup>
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="C++20 module">
+    ## C++20 module
+
+    reflect is also available as a named C++20 module via `reflect.cppm`.
+
+    <Steps>
+      <Step title="Get the module file">
+        Download `reflect.cppm` from [github.com/qlibs/reflect/blob/main/reflect.cppm](https://github.com/qlibs/reflect/blob/main/reflect.cppm) and place it in your project.
+      </Step>
+
+      <Step title="Import the module in your source">
+        ```cpp
+        import reflect;
+        ```
+      </Step>
+
+      <Step title="Compile">
+        Compile the module interface unit first, then compile your source against it:
+
+        <CodeGroup>
+
+        ```bash GCC
+        g++ -std=c++20 -fmodules-ts -c reflect.cppm
+        g++ -std=c++20 -fmodules-ts your_file.cpp reflect.cppm.o -o your_program
+        ```
+
+        ```bash Clang
+        clang++ -std=c++20 --precompile reflect.cppm -o reflect.pcm
+        clang++ -std=c++20 -fmodule-file=reflect.pcm your_file.cpp -o your_program
+        ```
+
+        </CodeGroup>
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## Compiler compatibility
+
+| Compiler | Minimum version | Notes |
+| -------- | --------------- | ----- |
+| GCC      | 12+             | Tested through GCC 13 |
+| Clang    | 15+             | Tested through Clang 17 |
+| MSVC     | 19.36+          | VS 2022 17.6+ |
+
+## Recommended compiler flags
+
+reflect compiles cleanly with strict warning flags. These are safe to use in any project:
+
+```bash
+-fno-exceptions -fno-rtti -Wall -Wextra -Werror -pedantic -pedantic-errors
+```
+
+MSVC equivalent:
+
+```
+/W4 /WX
+```
+
+<Note>
+  reflect does not use exceptions or RTTI internally, so `-fno-exceptions -fno-rtti` is fully supported.
+</Note>
+
+## Disabling self-tests
+
+By default, reflect runs its full test suite as `static_assert`s on every include. This guarantees correctness on your specific compiler and environment, but adds to compile time.
+
+To skip the tests, define `NTEST` before including:
+
+```bash
+g++ -std=c++20 -DNTEST -I/path/to/include your_file.cpp -o your_program
+```
+
+Or in source, before the include:
+
+```cpp
+#define NTEST
+#include <reflect>
+```
+
+<Warning>
+  With `-DNTEST`, there is no compile-time guarantee that reflect works correctly on your compiler. Use it only when you have already verified the library on the target compiler and environment.
+</Warning>
+
+## Compilation time benchmarks
+
+The following times were measured compiling the reflect header alone (as a translation unit) on a typical development machine:
+
+```
+time g++-13.2 -x c++ -std=c++20 reflect -c           # 0.253s
+time g++-13.2 -x c++ -std=c++20 reflect -c -DNTEST   # 0.113s
+```
+
+```
+time clang++-17 -x c++ -std=c++20 reflect -c         # 0.322s
+time clang++-17 -x c++ -std=c++20 reflect -c -DNTEST # 0.119s
+```
+
+Defining `-DNTEST` reduces compile time by roughly half in both cases.
+
+## Configuring enum range
+
+By default, `enum_name` searches the range `[0, 128)`. Override these limits per enum or globally:
+
+```cpp
+// Global override via compiler flag
+// -DREFLECT_ENUM_MIN=-1
+// -DREFLECT_ENUM_MAX=32
+
+// Per-enum override — define before the enum or after it
+enum class Status { Ok = 1, Error = 1024 };
+consteval auto enum_min(Status) { return Status::Ok; }
+consteval auto enum_max(Status) { return Status::Error; }
+```
+
+<Tip>
+  Keeping the enum range as tight as possible reduces the cost of `enum_name` at both compile time and runtime.
+</Tip>

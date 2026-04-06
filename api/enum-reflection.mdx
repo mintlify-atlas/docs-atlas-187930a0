@@ -1,0 +1,185 @@
+---
+title: "Enum Reflection"
+description: "Functions for converting enum values to their underlying types and to string names."
+---
+
+## reflect::to_underlying
+
+Converts an enum value to its underlying integer type. Equivalent to `static_cast<std::underlying_type_t<E>>(e)`.
+
+```cpp
+template <class E>
+[[nodiscard]] constexpr auto to_underlying(E e) noexcept;
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `E` | An enumeration type. |
+</Accordion>
+
+**Return value** — The value of `e` cast to `std::underlying_type_t<E>`.
+
+```cpp
+enum class Color { Red = 1, Green = 2, Blue = 3 };
+
+static_assert(1 == reflect::to_underlying(Color::Red));
+static_assert(2 == reflect::to_underlying(Color::Green));
+```
+
+---
+
+## reflect::enum_min / enum_max
+
+`consteval` customization-point functions that define the inclusive search range used by `enum_name` when scanning for valid enumerators. Override them for your enum type to control which values are considered.
+
+```cpp
+template <class E>
+[[nodiscard]] consteval auto enum_min(E) { return REFLECT_ENUM_MIN; }
+
+template <class E>
+[[nodiscard]] consteval auto enum_max(E) { return REFLECT_ENUM_MAX; }
+```
+
+The macros default to:
+
+```cpp
+#define REFLECT_ENUM_MIN 0    // override with -DREFLECT_ENUM_MIN=-1
+#define REFLECT_ENUM_MAX 128  // override with -DREFLECT_ENUM_MAX=32
+```
+
+<Note>
+  `enum_max` is clamped to `std::numeric_limits<underlying_type_t<E>>::max()` when that is smaller than `REFLECT_ENUM_MAX`, preventing out-of-range scans for small integer types such as `uint8_t`.
+</Note>
+
+### Overriding for a specific enum
+
+To restrict the scan range for a non-contiguous or large-valued enum, define `enum_min` and `enum_max` overloads in the same namespace as the enum (or in the global namespace):
+
+```cpp
+enum class Enum { foo = 1, bar = 1024 };
+
+consteval auto enum_min(Enum) { return Enum::foo; }
+consteval auto enum_max(Enum) { return Enum::bar; }
+
+static_assert(std::string_view{"foo"} == reflect::enum_name(Enum::foo));
+static_assert(std::string_view{"bar"} == reflect::enum_name(Enum::bar));
+```
+
+---
+
+## reflect::enum_name
+
+Returns the string name of an enumerator. If the value is not a named enumerator in the range `[Min, Max]`, returns the `unknown` fallback string (empty by default).
+
+```cpp
+template <class E,
+          fixed_string unknown = "",
+          auto Min = enum_min(E{}),
+          auto Max = enum_max(E{})>
+[[nodiscard]] constexpr auto enum_name(E e) noexcept -> std::string_view;
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Default | Description |
+  |-----------|---------|-------------|
+  | `E` | — | An enumeration type. Must satisfy `std::is_enum_v<E>`. |
+  | `unknown` | `""` | Fallback `std::string_view` returned when `e` is not a named enumerator. Pass any string literal, e.g. `"<unknown>"`. |
+  | `Min` | `enum_min(E{})` | Inclusive lower bound of the scan range (as the enum's underlying type). |
+  | `Max` | `enum_max(E{})` | Inclusive upper bound of the scan range. Must be `> Min`. |
+</Accordion>
+
+**Return value** — A `std::string_view` over `static constexpr` storage for valid enumerators, or the `unknown` string for unrecognised values.
+
+<Tabs>
+  <Tab title="Basic usage">
+    ```cpp
+    enum class Enum { foo = 1, bar = 2 };
+
+    static_assert(std::string_view{"foo"} == reflect::enum_name(Enum::foo));
+    static_assert(std::string_view{"bar"} == reflect::enum_name(Enum::bar));
+    ```
+  </Tab>
+  <Tab title="Custom range">
+    ```cpp
+    enum class Enum { foo = 1, bar = 1024 };
+
+    // Without a custom range, bar would be outside the default [0, 128] window.
+    consteval auto enum_min(Enum) { return Enum::foo; }
+    consteval auto enum_max(Enum) { return Enum::bar; }
+
+    static_assert(std::string_view{"foo"} == reflect::enum_name(Enum::foo));
+    static_assert(std::string_view{"bar"} == reflect::enum_name(Enum::bar));
+    ```
+  </Tab>
+  <Tab title="Unknown fallback">
+    ```cpp
+    enum class Color { Red = 1, Green = 2 };
+
+    // Default fallback is ""
+    static_assert(std::string_view{""} ==
+        reflect::enum_name<Color, "", 1, 2>(static_cast<Color>(99)));
+
+    // Custom fallback string
+    static_assert(std::string_view{"unknown"} ==
+        reflect::enum_name<Color, "unknown", 1, 2>(static_cast<Color>(99)));
+    ```
+  </Tab>
+  <Tab title="Negative values">
+    ```cpp
+    enum class Status { error = -1, ok = 0, pending = 1 };
+
+    static_assert(std::string_view{"error"}   ==
+        reflect::enum_name<Status, "<>", -1, 1>(Status::error));
+    static_assert(std::string_view{"ok"}      ==
+        reflect::enum_name<Status, "<>", -1, 1>(Status::ok));
+    static_assert(std::string_view{"pending"} ==
+        reflect::enum_name<Status, "<>", -1, 1>(Status::pending));
+    static_assert(std::string_view{"<>"}      ==
+        reflect::enum_name<Status, "<>", -1, 1>(static_cast<Status>(-42)));
+    ```
+  </Tab>
+  <Tab title="REFLECT_ENUM_MIN/MAX macros">
+    ```cpp
+    // Compile with -DREFLECT_ENUM_MAX=256 to extend the default range,
+    // or -DREFLECT_ENUM_MIN=-128 to include negative values by default.
+
+    // At runtime this translates to an efficient switch statement (no loops).
+    enum class Signal : uint8_t { A = 0, B = 1, C = 200 };
+    // With -DREFLECT_ENUM_MAX=255:
+    // reflect::enum_name(Signal::C) == "C"
+    ```
+  </Tab>
+</Tabs>
+
+<Warning>
+  The compile-time cost of `enum_name` is proportional to `Max - Min`. Very large ranges (e.g. `Max - Min > 1000`) will significantly increase compile times. Narrow the range with custom `enum_min`/`enum_max` overloads whenever possible.
+</Warning>
+
+### reflect::enumerators variable template
+
+`enumerators` is a public `constexpr` variable template that holds all valid named enumerators for an enum as a `std::array` of `std::pair{underlying_value, std::string_view}` pairs. It is computed once at compile time.
+
+```cpp
+template <class E,
+          int Min = enum_min(E{}),
+          int Max = enum_max(E{}),
+          auto enum_cases = detail::enum_cases<E, Min, Max>>
+inline constexpr auto enumerators = /* std::array of std::pair<underlying_type, std::string_view> */;
+```
+
+Use it to iterate over all valid enumerators of an enum:
+
+```cpp
+enum class Dir { North, South, East, West };
+
+for (auto [value, name] : reflect::enumerators<Dir>) {
+  std::println("{} = {}", name, value);
+}
+// North = 0
+// South = 1
+// East  = 2
+// West  = 3
+```
+
+Each element is a `std::pair` where `first` is the underlying integer value and `second` is the `std::string_view` name.

@@ -1,0 +1,151 @@
+---
+title: Performance
+description: Binary size, compilation times, and runtime characteristics of qlibs/reflect.
+---
+
+`reflect` is designed to produce minimal binary output and fast compile times. This page documents the measured characteristics.
+
+## Binary size
+
+All name-related operations compile to a constant load. The compiler reduces `type_name` and `member_name` calls to a single address load and an integer move — three instructions total.
+
+### type_name
+
+```cpp
+struct foo { int bar; };
+auto type_name(const foo& f) { return reflect::type_name(f); }
+```
+
+```asm
+type_name(foo const&):   // $CXX -O3 -DNDEBUG
+  lea rdx, [rip + type_name<foo>]
+  mov eax, 3
+  ret
+
+type_name<foo>:
+  .ascii  "foo"
+```
+
+The string `"foo"` is a read-only literal placed in the binary once. The function loads its address and length — no heap allocation, no string construction.
+
+### member_name
+
+```cpp
+struct foo { int bar; };
+auto member_name(const foo& f) { return reflect::member_name<0>(f); }
+```
+
+```asm
+member_name(foo const&):  // $CXX -O3 -DNDEBUG
+  lea rdx, [rip + member_name<0ul, foo>]
+  mov eax, 3
+  ret
+
+member_name<0ul, foo>:
+  .ascii  "bar"
+```
+
+Same pattern as `type_name` — one label per member, each emitted as a string literal.
+
+### enum_name
+
+`enum_name` generates a switch statement over the known enumerator values. Each case returns a pointer to a string literal:
+
+```cpp
+enum class E { A, B, };
+auto enum_name(const E e) { return reflect::enum_name(e); }
+```
+
+```asm
+enum_name(E):  // $CXX -O3 -DNDEBUG (generates switch)
+  xor     eax, eax
+  xor     ecx, ecx
+  cmp     edi, 1
+  sete    cl
+  lea     rdx, [rip + enum_name<0>]
+  cmove   rax, rdx
+  test    edi, edi
+  lea     rdx, [rip + enum_name<1>]
+  cmovne  rdx, rax
+  mov     eax, 1
+  cmovne  rax, rcx
+  ret
+
+enum_name<0ul>:
+  .ascii  "A"
+
+enum_name<1ul>:
+  .ascii  "B"
+```
+
+The switch is represented as a sequence of conditional moves — branch-free for small enums. Larger enums produce a standard jump table or a series of comparisons, depending on the compiler.
+
+<Tip>
+For hot paths that call `enum_name` in a tight loop over a large enum, consider the [Minimal Perfect Hashing](https://godbolt.org/z/WM155vTfv) approach that uses `qlibs/mph` to reduce the lookup to O(1) with no comparisons.
+</Tip>
+
+---
+
+## Compilation times
+
+Measured compiling the `reflect` header directly (which includes running all self-tests):
+
+<CodeGroup>
+
+```bash GCC 13.2
+time g++-13.2 -x c++ -std=c++20 reflect -c           # 0.253s
+time g++-13.2 -x c++ -std=c++20 reflect -c -DNTEST   # 0.113s
+```
+
+```bash Clang 17
+time clang++-17 -x c++ -std=c++20 reflect -c           # 0.322s
+time clang++-17 -x c++ -std=c++20 reflect -c -DNTEST   # 0.119s
+```
+
+</CodeGroup>
+
+The ~0.12s baseline (with `-DNTEST`) is the cost of parsing and instantiating the library itself. The additional ~0.12–0.20s comes from running the full self-test suite.
+
+---
+
+## Runtime performance
+
+All of the following have **zero runtime overhead** — they are fully `constexpr` and collapse to constants at `-O1` or higher:
+
+- `reflect::type_name<T>()` — returns a `std::string_view` pointing to a static string literal
+- `reflect::member_name<N, T>()` — same
+- `reflect::size<T>()` — evaluated entirely at compile time
+- `reflect::type_id<T>()` — computed from the type name at compile time
+- `reflect::get<N>(t)` — equivalent to a structured binding access
+
+`reflect::enum_name(e)` has a small runtime cost proportional to the number of valid enumerators in the range, since it executes a switch. At `-O3` the compiler converts small enums to branch-free conditional moves as shown above.
+
+`reflect::visit(fn, t)` itself is zero-overhead — it is a structured binding plus a function call with no intermediate allocations.
+
+---
+
+## Tips for fast builds
+
+<CardGroup cols={2}>
+
+<Card title="Use -DNTEST in CI release builds" icon="bolt">
+After verifying the library works on your compiler, disable the test suite. The savings range from ~0.1s to ~0.2s per translation unit that includes `<reflect>`.
+</Card>
+
+<Card title="Narrow enum ranges" icon="sliders">
+`REFLECT_ENUM_MAX` defaults to 128. If your enums are small, set a tighter bound:
+```bash
+-DREFLECT_ENUM_MAX=32
+```
+Or use per-type overrides via `consteval auto enum_min/max`.
+</Card>
+
+<Card title="Use the C++20 module" icon="cube">
+`reflect.cppm` is available as an alternative to the header. Modules provide better incremental compilation — the module interface is compiled once and reused across translation units, avoiding re-parsing on every include.
+</Card>
+
+<Card title="No recursive template instantiations" icon="tree">
+Unlike most TMP reflection libraries, `reflect` does not chain template instantiations for counting or visiting. The `size()` algorithm is a `constexpr` value-level recursion, not a type-level one. This keeps symbol tables small and linker times short.
+</Card>
+
+</CardGroup>

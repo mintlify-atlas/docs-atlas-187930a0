@@ -1,80 +1,139 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Get reflect included in your project and walk through a complete working example covering the core API."
 ---
 
-## Get started in three steps
+## Prerequisites
 
-Get your documentation site running locally and make your first customization.
+You need a C++20-capable compiler:
 
-### Step 1: Set up your local environment
+- GCC 12 or later
+- Clang 15 or later
+- MSVC 19.36 or later
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+No build system, package manager, or additional dependencies are required.
 
-### Step 2: Deploy your changes
+## Hello world
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+The following example is the canonical reflect overview. It demonstrates every core API function in a single file that compiles and runs with no changes.
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+<Steps>
+  <Step title="Get the header">
+    Download the single header file directly:
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    curl -O https://raw.githubusercontent.com/qlibs/reflect/main/reflect
+    ```
 
-### Step 3: Go live
+    Or copy it from `qlibs/reflect` into your project's include directory. The file has no extension — it is included as `<reflect>`.
+  </Step>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+  <Step title="Write your program">
+    Create a file `hello.cpp` with the following contents:
+
+    ```cpp
+    #include <reflect>
+    #include <print>
+
+    using namespace std::literals;
+
+    enum E { A, B };
+    struct foo { int a; E b; };
+
+    constexpr auto f = foo{.a = 42, .b = B};
+
+    // reflect::size — number of members in an aggregate
+    static_assert(2 == reflect::size(f));
+
+    // reflect::type_id — unique compile-time identifier per type
+    static_assert(reflect::type_id(f.a) != reflect::type_id(f.b));
+
+    // reflect::type_name — string_view of the type's name
+    static_assert("foo"sv == reflect::type_name(f));
+    static_assert("int"sv == reflect::type_name(f.a));
+    static_assert("E"sv   == reflect::type_name(f.b));
+
+    // reflect::enum_name — string_view of an enumerator's name
+    static_assert("B"sv == reflect::enum_name(f.b));
+
+    // reflect::member_name — string_view of a member's name by index
+    static_assert("a"sv == reflect::member_name<0>(f));
+    static_assert("b"sv == reflect::member_name<1>(f));
+
+    // reflect::get by index
+    static_assert(42 == reflect::get<0>(f));
+    static_assert(B  == reflect::get<1>(f));
+
+    // reflect::get by name
+    static_assert(42 == reflect::get<"a">(f));
+    static_assert(B  == reflect::get<"b">(f));
+
+    // reflect::to — convert aggregate to another type (e.g. std::tuple)
+    constexpr auto t = reflect::to<std::tuple>(f);
+    static_assert(42 == std::get<0>(t));
+    static_assert(B  == std::get<1>(t));
+
+    int main() {
+      // reflect::for_each — iterate over members with a compile-time index
+      reflect::for_each([](auto I) {
+        std::println("{}.{}:{}={} ({}/{}/{})",
+          reflect::type_name(f),                  // foo, foo
+          reflect::member_name<I>(f),             // a  , b
+          reflect::type_name(reflect::get<I>(f)), // int, E
+          int(reflect::get<I>(f)),                // 42 , B
+          reflect::size_of<I>(f),                 // 4  , 4
+          reflect::align_of<I>(f),                // 4  , 4
+          reflect::offset_of<I>(f));              // 0  , 4
+      }, f);
+    }
+    ```
+  </Step>
+
+  <Step title="Compile and run">
+    Pass the directory containing the `reflect` file as an include path:
+
+    ```bash
+    g++ -std=c++20 -I/path/to/reflect-dir hello.cpp -o hello
+    ./hello
+    ```
+
+    Expected output:
+
+    ```
+    foo.a:int=42 (4/4/0)
+    foo.b:E=1 (4/4/4)
+    ```
+
+    <Tip>
+      Add `-DNTEST` to skip the built-in self-tests and cut compile time roughly in half (~0.25s → ~0.11s).
+    </Tip>
+  </Step>
+</Steps>
+
+## What just happened
+
+| Feature | What it does |
+| ------- | ------------ |
+| `reflect::size(f)` | Returns the number of data members in the aggregate `f`. |
+| `reflect::type_name(f)` | Returns `std::string_view` of the type name of `f` or any expression. |
+| `reflect::type_id(expr)` | Returns a compile-time value unique to the type of `expr`. Comparable with `==` and `!=`. |
+| `reflect::enum_name(e)` | Returns `std::string_view` of the enumerator name for value `e`. |
+| `reflect::member_name<N>(f)` | Returns `std::string_view` of the name of the Nth member of `f`. |
+| `reflect::get<N>(f)` | Returns a reference to the Nth member of `f`. |
+| `reflect::get<"name">(f)` | Returns a reference to the member named `"name"` in `f`. |
+| `reflect::to<std::tuple>(f)` | Converts `f` into a `std::tuple` of references to its members. |
+| `reflect::for_each(fn, f)` | Calls `fn` with a compile-time index `I` for each member of `f`. |
+| `reflect::size_of<N>(f)` | `sizeof` of the Nth member. |
+| `reflect::align_of<N>(f)` | `alignof` of the Nth member. |
+| `reflect::offset_of<N>(f)` | Byte offset of the Nth member within the struct. |
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Installation" icon="download" href="/installation">
+    Single-header vs C++20 module setup, compiler flags, and compile-time benchmarks.
+  </Card>
+  <Card title="API reference" icon="book-open" href="/api/overview">
+    Full reference for every function in the reflect namespace.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

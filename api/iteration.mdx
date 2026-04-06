@@ -1,0 +1,145 @@
+---
+title: "Iteration"
+description: "Iterate over all members of an aggregate with a compile-time index using reflect::for_each."
+---
+
+## reflect::for_each
+
+Calls a callback once for each member of an aggregate type, in declaration order. The callback receives a single argument: a `std::integral_constant<std::size_t, N>` representing the member's zero-based index. This constant can be used directly as a template argument to `get`, `member_name`, `size_of`, `align_of`, and `offset_of`.
+
+```cpp
+template <class T, class Fn>
+constexpr auto for_each(Fn&& fn) -> void;
+
+template <class Fn, class T>
+constexpr auto for_each(Fn&& fn, T&& t) -> void;
+```
+
+<Accordion title="Template parameters">
+  | Parameter | Description |
+  |-----------|-------------|
+  | `T` | An aggregate type. Must satisfy `std::is_aggregate_v<std::remove_cvref_t<T>>`. When using the two-argument overload, `T` is deduced from the second argument. |
+  | `Fn` | A generic callable (typically a generic lambda). The callback is invoked with `fn(std::integral_constant<std::size_t, N>{})` for `N` in `[0, size<T>())`. |
+</Accordion>
+
+**Return value** — `void`. The callback's return values are discarded.
+
+<Note>
+  The index `I` inside the callback is a compile-time constant. It can be used as a template argument: `reflect::get<I>(obj)`, `reflect::member_name<I>(obj)`, `reflect::size_of<I>(obj)`, etc.
+</Note>
+
+---
+
+### The callback parameter
+
+The callback receives `std::integral_constant<std::size_t, N>` for each index. Because the value is encoded in the type, it can be passed directly as a non-type template argument anywhere a `std::size_t` compile-time constant is required:
+
+```cpp
+reflect::for_each([](auto I) {
+  // I is std::integral_constant<std::size_t, N>
+  // I can be used as a template argument directly:
+  reflect::get<I>(obj);
+  reflect::member_name<I>(obj);
+  reflect::size_of<I>(obj);
+}, obj);
+```
+
+---
+
+### Hello world example
+
+```cpp
+#include <reflect>
+#include <print>
+
+enum E { A, B };
+struct foo { int a; E b; };
+
+constexpr auto f = foo{.a = 42, .b = B};
+
+int main() {
+  reflect::for_each([](auto I) {
+    std::println("{}.{}:{}={} ({}/{}/{})",
+      reflect::type_name(f),                  // foo, foo
+      reflect::member_name<I>(f),             // a  , b
+      reflect::type_name(reflect::get<I>(f)), // int, E
+      int(reflect::get<I>(f)),                // 42 , 1
+      reflect::size_of<I>(f),                 // 4  , 4
+      reflect::align_of<I>(f),                // 4  , 4
+      reflect::offset_of<I>(f));              // 0  , 4
+  }, f);
+}
+```
+
+Output:
+```
+foo.a:int=42 (4/4/0)
+foo.b:E=1 (4/4/4)
+```
+
+---
+
+### Overloads
+
+<Tabs>
+  <Tab title="Type parameter (no instance)">
+    ```cpp
+    // Use when you have no instance but know the type.
+    // Must pass T explicitly.
+    struct foo { int a; int b; };
+
+    reflect::for_each<foo>([](auto I) {
+      // I = 0, then I = 1
+    });
+    ```
+  </Tab>
+  <Tab title="Value parameter">
+    ```cpp
+    // T is deduced from the argument.
+    struct foo { int a; int b; };
+    foo f{.a = 1, .b = 2};
+
+    reflect::for_each([&](auto I) {
+      // Access value via f
+      auto val = reflect::get<I>(f);
+    }, f);
+    ```
+  </Tab>
+  <Tab title="Collecting per-member data">
+    ```cpp
+    struct foo { short _1; int _2; } f{._1 = 1, ._2 = 2};
+
+    std::array<std::size_t, reflect::size(f)>      size_of{};
+    std::array<std::size_t, reflect::size(f)>      align_of{};
+    std::array<std::size_t, reflect::size(f)>      offset_of{};
+    std::array<std::string_view, reflect::size(f)> names{};
+    std::array<std::string_view, reflect::size(f)> types{};
+
+    int i = 0;
+    reflect::for_each([&](auto I) {
+      size_of[i]   = reflect::size_of<I>(f);
+      align_of[i]  = reflect::align_of<I>(f);
+      offset_of[i] = reflect::offset_of<I>(f);
+      names[i]     = reflect::member_name<I>(f);
+      types[i]     = reflect::type_name(reflect::get<I>(f));
+      ++i;
+    }, f);
+    ```
+  </Tab>
+  <Tab title="Simple print">
+    ```cpp
+    struct { int a; int b; } f{.a = 4, .b = 2};
+
+    reflect::for_each([&](const auto I) {
+      // prints: a:4, b:2
+      std::print("{}:{} ",
+        reflect::member_name<I>(f),
+        reflect::get<I>(f));
+    }, f);
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+  `for_each` is the idiomatic way to iterate over members when you need both the compile-time index (for template arguments) and the runtime value (via `get`). If you only need runtime access to all values at once, prefer `visit`.
+</Tip>

@@ -1,0 +1,263 @@
+---
+title: Examples
+description: Real-world usage examples for qlibs/reflect — struct introspection, enum reflection, tuple conversion, cross-struct copy, and more.
+---
+
+## Basic struct introspection
+
+The canonical "hello world" example demonstrates all major features of `reflect` together. ([Try it online](https://godbolt.org/z/oYhh1hfeo))
+
+```cpp
+#include <reflect>
+
+enum E { A, B };
+struct foo { int a; E b; };
+
+constexpr auto f = foo{.a = 42, .b = B};
+
+// Member count
+static_assert(2 == reflect::size(f));
+
+// Type identity
+static_assert(reflect::type_id(f.a) != reflect::type_id(f.b));
+
+// Type names
+static_assert("foo"sv == reflect::type_name(f));
+static_assert("int"sv == reflect::type_name(f.a));
+static_assert("E"sv   == reflect::type_name(f.b));
+
+// Enum name
+static_assert("B"sv == reflect::enum_name(f.b));
+
+// Member names
+static_assert("a"sv == reflect::member_name<0>(f));
+static_assert("b"sv == reflect::member_name<1>(f));
+
+// Access by index
+static_assert(42 == reflect::get<0>(f));
+static_assert(B  == reflect::get<1>(f));
+
+// Access by name
+static_assert(42 == reflect::get<"a">(f));
+static_assert(B  == reflect::get<"b">(f));
+
+// Convert to tuple
+constexpr auto t = reflect::to<std::tuple>(f);
+static_assert(42 == std::get<0>(t));
+static_assert(B  == std::get<1>(t));
+
+// Iterate over all members
+int main() {
+  reflect::for_each([](auto I) {
+    std::println("{}.{}:{}={} ({}/{}/{})",
+      reflect::type_name(f),                  // foo, foo
+      reflect::member_name<I>(f),             // a  , b
+      reflect::type_name(reflect::get<I>(f)), // int, E
+      int(reflect::get<I>(f)),                // 42 , B
+      reflect::size_of<I>(f),                 // 4  , 4
+      reflect::align_of<I>(f),                // 4  , 4
+      reflect::offset_of<I>(f));              // 0  , 4
+  }, f);
+}
+```
+
+`for_each` calls the lambda with a compile-time `std::integral_constant` index `I` for each member. Because `I` is a compile-time value, it can be used as a template argument in `member_name<I>` and `get<I>`.
+
+---
+
+## Enum reflection
+
+### Basic enum_name
+
+```cpp
+enum class Color { Red = 1, Green = 2, Blue = 3 };
+
+static_assert("Red"   == reflect::enum_name(Color::Red));
+static_assert("Green" == reflect::enum_name(Color::Green));
+static_assert("Blue"  == reflect::enum_name(Color::Blue));
+
+// Unknown values return an empty string_view by default
+auto name = reflect::enum_name(static_cast<Color>(99)); // ""
+```
+
+### Unknown value fallback
+
+```cpp
+enum class Color { Red = 1, Green = 2, Blue = 3 };
+
+// Supply a fallback string as a template argument
+auto name = reflect::enum_name<Color, "unknown">(static_cast<Color>(99));
+// name == "unknown"
+```
+
+### Sparse / large-range enums
+
+```cpp
+enum class Flags { None = 0, Read = 1, Write = 4, Exec = 16 };
+
+// Override the search range for this enum type
+consteval auto enum_min(Flags) { return 0; }
+consteval auto enum_max(Flags) { return 16; }
+
+static_assert("None"  == reflect::enum_name(Flags::None));
+static_assert("Read"  == reflect::enum_name(Flags::Read));
+static_assert("Write" == reflect::enum_name(Flags::Write));
+static_assert("Exec"  == reflect::enum_name(Flags::Exec));
+```
+
+### Iterating all enumerators
+
+```cpp
+enum class Dir { North, South, East, West };
+
+// reflect::enumerators is a constexpr std::array of {underlying_value, name} pairs
+for (auto [value, name] : reflect::enumerators<Dir>) {
+  std::println("{} = {}", name, value);
+}
+// North = 0
+// South = 1
+// East  = 2
+// West  = 3
+```
+
+---
+
+## Struct-to-tuple conversion
+
+`reflect::to<std::tuple>` produces either a value tuple (from rvalues) or a reference tuple (from lvalues).
+
+```cpp
+struct foo { int a; int b; };
+
+// Value tuple (copied from rvalue)
+constexpr auto t = reflect::to<std::tuple>(foo{.a=4, .b=2});
+static_assert(4 == std::get<0>(t));
+static_assert(2 == std::get<1>(t));
+
+// Reference tuple (lvalue — modifications propagate both ways)
+auto f = foo{.a=4, .b=2};
+auto t = reflect::to<std::tuple>(f);
+
+std::get<0>(t) *= 10;  // modifies f.a through the reference
+f.b = 42;              // modifies t[1] through the reference
+
+assert(40 == std::get<0>(t) and 40 == f.a);
+assert(42 == std::get<1>(t) and 42 == f.b);
+```
+
+<Note>
+The reference semantics only apply when calling `to<std::tuple>(lvalue)`. The tuple element types will be `int&`, `float&`, etc. Calling `to<std::tuple>(rvalue)` produces a tuple with value types.
+</Note>
+
+---
+
+## Cross-struct copy
+
+`reflect::copy` copies members from one aggregate to another by matching on member names. Members that exist only in the source or only in the destination are silently skipped.
+
+### Full copy
+
+```cpp
+struct foo { int a; int b; };
+struct bar { int a{}; int b{}; };
+
+foo f{.a=1, .b=2};
+bar b{};
+
+reflect::copy(f, b);
+assert(b.a == f.a);  // 1
+assert(b.b == f.b);  // 2
+```
+
+### Selective copy
+
+Pass member names as template arguments to copy only specific fields:
+
+```cpp
+struct foo { int a; int b; int c; };
+struct bar { int a{}; int b{}; int c{}; };
+
+foo f{.a=1, .b=2, .c=3};
+bar b{.a=0, .b=0, .c=99};
+
+reflect::copy<"a", "b">(f, b);  // only copies a and b
+assert(b.a == 1);
+assert(b.b == 2);
+assert(b.c == 99);  // unchanged
+```
+
+### Partial match (different struct shapes)
+
+```cpp
+struct foo { int a; int b; };
+struct baz { int a{}; int c{}; };  // has 'a' but not 'b'; has 'c' but not in foo
+
+baz b{};
+reflect::copy(foo{.a=4, .b=2}, b);
+assert(4 == b.a);  // copied by name match
+assert(0 == b.c);  // no matching source member — unchanged
+```
+
+---
+
+## Opt-in mixins pattern
+
+`reflect` enables a clean opt-in mixin pattern where a base struct gains serialization, printing, or comparison capabilities automatically based on its reflected members.
+
+```cpp
+// A mixin that adds operator== via reflection
+template<class Derived>
+struct equality_mixin {
+  friend bool operator==(const Derived& lhs, const Derived& rhs) {
+    bool equal = true;
+    reflect::for_each([&](auto I) {
+      equal = equal and (reflect::get<I>(lhs) == reflect::get<I>(rhs));
+    }, lhs);
+    return equal;
+  }
+};
+
+struct Point : equality_mixin<Point> {
+  int x, y;
+};
+
+Point p1{1, 2}, p2{1, 2}, p3{1, 3};
+assert(p1 == p2);
+assert(!(p1 == p3));
+```
+
+See the [Godbolt example](https://godbolt.org/z/sj7fYKoc3) for a more complete mixin demonstration.
+
+---
+
+## Meta-programming with reflect
+
+`reflect` integrates with [qlibs/mp](https://github.com/qlibs/mp) for advanced meta-programming over reflected types — for example, filtering members by type, applying transformations to all members of a given kind, or building type lists from struct definitions.
+
+```cpp
+// Example: collect all member types of a struct as a type list
+// (using qlibs/mp for type-list operations)
+struct foo { int a; float b; double c; };
+
+// visit gives you all members as a pack
+reflect::visit([](auto&&... members) {
+  // members are int&, float&, double& (for lvalue foo)
+  // apply mp operations to the types...
+}, foo{});
+```
+
+See the [Godbolt integration demo](https://godbolt.org/z/ds3KMGhqP) for a working example.
+
+---
+
+## Minimal Perfect Hashing for enum_name
+
+For performance-critical code that calls `enum_name` in tight loops over large enums, you can replace the default switch-based lookup with a minimal perfect hash table using [qlibs/mph](https://github.com/qlibs/mph).
+
+The technique precomputes a collision-free hash function at compile time over the set of valid enumerator values, reducing every lookup to a single hash computation and one array access — O(1) with no comparisons.
+
+See the [Godbolt demo](https://godbolt.org/z/WM155vTfv) for a complete implementation.
+
+<Tip>
+This optimization is most useful when `enum_name` is called millions of times in a hot path (e.g., logging frameworks, serialization hot loops). For typical use cases the default switch-based implementation is already extremely fast.
+</Tip>

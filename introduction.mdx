@@ -1,0 +1,68 @@
+---
+title: "Introduction"
+description: "reflect is a single-header C++20 static reflection library that lets you inspect aggregate types, enums, and struct members at compile time with zero overhead."
+---
+
+## What is reflect?
+
+`reflect` is a minimal C++20 static reflection library distributed as a single header file. It provides compile-time introspection of aggregate types and enums — no macros, no code generation, no external tooling required.
+
+You include one file, and you can immediately query type names, member names, field values, sizes, alignments, and offsets for any aggregate struct or enum — all as constant expressions.
+
+```cpp
+#include <reflect>
+
+struct Point { int x; int y; };
+
+static_assert(2 == reflect::size<Point>());
+static_assert("x" == reflect::member_name<0, Point>());
+static_assert("Point" == reflect::type_name<Point>());
+```
+
+## Features
+
+- **Single header** — copy one file, add it to your include path, and you're done. Also available as a C++20 module.
+- **Minimal API** — a small, focused set of primitives: `size`, `type_name`, `type_id`, `member_name`, `get`, `for_each`, `enum_name`, `copy`, `to`, and layout queries.
+- **Self-verifying** — runs its full test suite via `static_assert` on every include. If the header compiles, the library works correctly on your compiler and environment.
+- **No UB, no memory leaks** — guaranteed by the self-tests passing.
+- **Clean compilation** — compiles without warnings under `-fno-exceptions -fno-rtti -Wall -Wextra -Werror -pedantic -pedantic-errors` and MSVC `/W4 /WX`.
+- **Compiler-agnostic implementation** — no `#ifdef` blocks for compiler differences. The library auto-detects compiler-specific name formatting from `std::source_location` at include time.
+- **Optimized output** — `type_name` and `member_name` compile down to a single `lea` + `ret`. `enum_name` generates a switch statement. No runtime overhead.
+- **Fast compile times** — ~0.25s with tests, ~0.11s with `-DNTEST`.
+
+## Compiler requirements
+
+reflect requires a C++20-conformant compiler:
+
+| Compiler | Minimum version |
+| -------- | --------------- |
+| GCC      | 12+             |
+| Clang    | 15+             |
+| MSVC     | 19.36+          |
+
+## How reflect differs from P2996
+
+[P2996](https://wg21.link/P2996) is a language proposal to add reflection directly to the C++ standard. It offers a much larger feature set including reflective access to function parameters, template arguments, base classes, and more.
+
+`reflect` provides a subset of basic reflection primitives, implemented today using C++20's structured bindings, concepts, and `std::source_location`. It is not a replacement for P2996 — it is a practical library you can use right now, without waiting for compiler support of a future language proposal.
+
+<Note>
+  `reflect` works entirely within standard C++20. It uses no compiler extensions or non-standard pragmas.
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    See a complete working example covering the main API in under five minutes.
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Single-header and C++20 module setup, compiler flags, and compilation time benchmarks.
+  </Card>
+  <Card title="API reference" icon="book-open" href="/api/overview">
+    Full reference for every function in the reflect namespace.
+  </Card>
+  <Card title="FAQ" icon="circle-question" href="/guides/faq">
+    How reflect works under the hood, extending member limits, and more.
+  </Card>
+</CardGroup>

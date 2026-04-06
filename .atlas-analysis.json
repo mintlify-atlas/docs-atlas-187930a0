@@ -1,0 +1,84 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "reflect",
+  "projectDescription": "A single-header C++20 static reflection library that provides compile-time introspection of aggregate types, enums, and their members with zero overhead.",
+  "theme": "luma",
+  "primaryColor": "#94cb04",
+  "lightColor": "#545454",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "API Reference",
+            "pages": [
+              "api/overview",
+              "api/type-introspection",
+              "api/member-access",
+              "api/enum-reflection",
+              "api/struct-operations",
+              "api/iteration",
+              "api/layout-queries"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/how-it-works",
+              "guides/configuration",
+              "guides/performance",
+              "guides/examples",
+              "guides/faq"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Single-header / C++20 module — zero external dependencies",
+    "Compile-time member name and type introspection for aggregate types",
+    "Enum name reflection with configurable min/max range",
+    "Member access by index or string name at compile time",
+    "Struct-to-tuple conversion and cross-struct field copy",
+    "Layout queries: size_of, align_of, offset_of per member",
+    "Self-verifying via static_assert tests on include",
+    "Compiler-agnostic: no #ifdefs for implementation differences",
+    "Supports gcc-12+, clang-15+, msvc-19.36+"
+  ],
+  "publicApiSurface": [
+    "reflect::visit(fn, t)",
+    "reflect::size<T>()",
+    "reflect::size(t)",
+    "reflect::type_name<T>()",
+    "reflect::type_name(t)",
+    "reflect::type_id<T>()",
+    "reflect::type_id(t)",
+    "reflect::type_id_v<T>",
+    "reflect::to_underlying(e)",
+    "reflect::enum_min(e)",
+    "reflect::enum_max(e)",
+    "reflect::enum_name(e)",
+    "reflect::member_name<N>(t)",
+    "reflect::get<N>(t)",
+    "reflect::get<\"name\">(t)",
+    "reflect::has_member_name<T, Name>",
+    "reflect::index_of<\"name\", T>()",
+    "reflect::copy(src, dst)",
+    "reflect::to<Container>(t)",
+    "reflect::size_of<N>(t)",
+    "reflect::align_of<N>(t)",
+    "reflect::offset_of<N>(t)",
+    "reflect::for_each(fn, t)"
+  ]
+}
